@@ -1,6 +1,6 @@
 # deadband
 
-**Firmware vulnerability gap detector for Rockwell ICS/OT assets**
+**Firmware vulnerability detector for Rockwell ICS/OT assets**
 
 deadband discovers Rockwell Automation devices on your network and cross-references their firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface known CVEs. It can also accept pre-collected inventory files (CSV/JSON) from [rockwell-discovery](https://github.com/jmeltz/rockwell-discovery) or other sources.
 
