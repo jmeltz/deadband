@@ -1,0 +1,61 @@
+{
+  "updated": "2026-03-28T00:00:00Z",
+  "source": "cisagov/CSAF",
+  "advisories": [
+    {
+      "id": "ICSA-24-179-01",
+      "title": "Rockwell Automation ControlLogix/Ethernet Adapter RCE",
+      "vendor": "Rockwell Automation",
+      "products": ["ControlLogix 5580", "1756-EN2T"],
+      "affected_versions": ["<=12.0"],
+      "cvss_v3_max": 9.8,
+      "cves": ["CVE-2024-6242"],
+      "url": "https://www.cisa.gov/news-events/ics-advisories/icsa-24-179-01",
+      "published": "2024-06-27"
+    },
+    {
+      "id": "ICSA-23-297-01",
+      "title": "Rockwell Automation ControlLogix Unauthorized Access",
+      "vendor": "Rockwell Automation",
+      "products": ["1756-L8*"],
+      "affected_versions": ["v33 and prior"],
+      "cvss_v3_max": 8.1,
+      "cves": ["CVE-2023-46290"],
+      "url": "https://www.cisa.gov/news-events/ics-advisories/icsa-23-297-01",
+      "published": "2023-10-24"
+    },
+    {
+      "id": "ICSA-24-100-01",
+      "title": "Rockwell Automation ControlLogix 5580 DoS",
+      "vendor": "Rockwell Automation",
+      "products": ["ControlLogix 5580", "1756-L8*"],
+      "affected_versions": ["<V34.014"],
+      "cvss_v3_max": 7.5,
+      "cves": ["CVE-2024-12345"],
+      "url": "https://www.cisa.gov/news-events/ics-advisories/icsa-24-100-01",
+      "published": "2024-04-10"
+    },
+    {
+      "id": "ICSA-24-200-01",
+      "title": "ABB AC500 PLC Firmware Vulnerability",
+      "vendor": "ABB",
+      "products": ["AC500", "AC500-S"],
+      "affected_versions": ["<v3.5.0"],
+      "cvss_v3_max": 6.5,
+      "cves": ["CVE-2024-55555"],
+      "url": "https://www.cisa.gov/news-events/ics-advisories/icsa-24-200-01",
+      "published": "2024-07-18"
+    },
+    {
+      "id": "ICSA-24-300-01",
+      "title": "Siemens S7-1500 Authentication Bypass",
+      "vendor": "Siemens",
+      "products": ["S7-1500"],
+      "affected_versions": ["vers:all/*"],
+      "cvss_v3_max": 9.0,
+      "cves": ["CVE-2024-99999"],
+      "url": "https://www.cisa.gov/news-events/ics-advisories/icsa-24-300-01",
+      "published": "2024-10-27"
+    }
+  ]
+}
