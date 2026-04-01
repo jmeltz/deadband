@@ -1,0 +1,32 @@
+[
+  {
+    "scanned_ip": "172.16.12.21",
+    "device_name": "1756-EN2T/D",
+    "mac": "5C:88:16:C4:26:3C",
+    "ip": "172.16.12.21",
+    "product_revision": "11.002",
+    "serial": "D060925B",
+    "status": "Run",
+    "uptime": "206 days, 03h:12m:20s"
+  },
+  {
+    "scanned_ip": "172.16.12.22",
+    "device_name": "1756-EN2T/D",
+    "mac": "5C:88:16:C4:26:4A",
+    "ip": "172.16.12.22",
+    "product_revision": "11.002",
+    "serial": "D060926C",
+    "status": "Run",
+    "uptime": "206 days, 03h:12m:15s"
+  },
+  {
+    "scanned_ip": "172.16.12.30",
+    "device_name": "1756-L83E/B",
+    "mac": "5C:88:16:C4:27:1D",
+    "ip": "172.16.12.30",
+    "product_revision": "28.011",
+    "serial": "E070102A",
+    "status": "Run",
+    "uptime": "120 days, 15h:30m:00s"
+  }
+]
