@@ -6,7 +6,7 @@ deadband discovers Rockwell Automation devices on your network and cross-referen
 
 ## Why
 
-There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs and their firmware versions" and outputs "here are the open CVEs against them." Tenable and Dragos do this inside licensed platforms. deadband does it for free, in a terminal, with no agent.
+There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs and their firmware versions" and outputs "here are the open CVEs against them." Tenable and Dragos do this inside licensed platforms. deadband does it for free, in a terminal, with no agent or sensor necessary.
 
 ## Safety
 
