@@ -2,7 +2,7 @@
 
 **Firmware vulnerability gap detector for ICS/OT assets**
 
-deadband takes a list of discovered OT devices (from [trics/rockwell-discover](https://github.com/jmeltz/trics), or a manually-supplied CSV/JSON) and cross-references firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface devices running firmware with known CVEs.
+deadband discovers Rockwell Automation devices on your network and cross-references their firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface known CVEs. It can also accept pre-collected inventory files (CSV/JSON) from [trics/rockwell-discover](https://github.com/jmeltz/trics) or other sources.
 
 ## Why
 
@@ -10,7 +10,7 @@ There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs
 
 ## Safety
 
-- **Read-only by construction** - no packets sent to OT devices
+- **Read-only by construction** - discovery uses only TCP port probes and HTTP GET (no CIP writes)
 - **Conservative and safe** - no external API calls at runtime; advisory data is fetched/cached separately
 - **Transparent** - prints a safety banner on startup, uses only public CISA data (TLP:WHITE)
 - **Scriptable** - structured output, meaningful exit codes
@@ -24,7 +24,10 @@ make deadband
 # Fetch advisory database (one-time, requires internet)
 bin/deadband --update
 
-# Check devices against advisories
+# Discover and check in one shot
+bin/deadband --cidr 10.0.1.0/24
+
+# Or check a pre-collected inventory file
 bin/deadband --inventory devices.csv
 
 # JSON output with filters
@@ -56,11 +59,20 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 
 ## Flags
 
+### Discovery Mode
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
+| `--timeout` | `2s` | TCP port scan timeout |
+| `--http-timeout` | `5s` | HTTP scrape timeout |
+| `--concurrency` | `50` | Concurrent scan workers |
+
 ### Check Mode
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--inventory` / `-i` | (required) | Path to device inventory file |
+| `--inventory` / `-i` | | Path to device inventory file |
 | `--format` | auto-detect | Input format: `csv`, `json`, `flat` |
 | `--db` | `~/.deadband/advisories.json` | Path to advisory database |
 | `--output` / `-o` | stdout | Output file path |
@@ -121,6 +133,7 @@ bin/deadband --update --source ./local-csaf-mirror/
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
 pkg/cli/banner.go          # Safety banner
+pkg/discover/              # Rockwell EtherNet/IP device discovery
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
 pkg/output/                # Text, CSV, JSON formatters
