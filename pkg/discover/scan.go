@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	EIPPort = 44818
-	S7Port  = 102
+	EIPPort       = 44818
+	S7Port        = 102
+	ModbusTCPPort = 502
 )
 
 // ExpandCIDR returns all usable host IPs in a CIDR range.
