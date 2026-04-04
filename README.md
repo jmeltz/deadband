@@ -36,6 +36,9 @@ bin/deadband --cidr 10.0.1.0/24 --mode modbus
 # Scan Mitsubishi MELSEC PLCs only
 bin/deadband --cidr 10.0.1.0/24 --mode melsec
 
+# Scan BACnet/IP devices (Trane, Honeywell, Johnson Controls)
+bin/deadband --cidr 10.0.1.0/24 --mode bacnet
+
 # Or check a pre-collected inventory file
 bin/deadband --inventory devices.csv
 
@@ -73,7 +76,7 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
-| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `modbus`, `melsec`, `http` |
+| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `modbus`, `melsec`, `bacnet`, `http` |
 | `--timeout` | `2s` | TCP/UDP scan timeout |
 | `--http-timeout` | `5s` | HTTP scrape timeout |
 | `--concurrency` | `50` | Concurrent scan workers |
@@ -169,8 +172,9 @@ cd web && npm run dev
 | S7comm SZL Read | TCP 102 | Siemens (S7-300/400/1200/1500) | 3-phase handshake (COTP + S7 Setup + SZL 0x001C), extracts module name + firmware |
 | Modbus TCP Device ID | TCP 502 | Schneider Electric, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton | FC 43 / MEI 14 Read Device Identification, extracts vendor + model + firmware |
 | MELSEC/SLMP | TCP 5007 | Mitsubishi Electric (iQ-R, iQ-F, Q, L, FX5) | Read Type Name (command 0x0101), extracts CPU model name |
+| BACnet/IP | UDP 47808 | Trane, Honeywell, Johnson Controls, Carrier, Daikin | Who-Is + ReadProperty, extracts vendor ID + model + firmware |
 
-Auto mode (`--mode auto`, the default) runs all four protocols concurrently and merges results.
+Auto mode (`--mode auto`, the default) runs all five protocols concurrently and merges results.
 
 ## Scanning Roadmap
 
@@ -186,7 +190,7 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 | Delta Electronics | 94 | Modbus TCP (TCP 502) | Implemented |
 | Advantech | 78 | Modbus TCP / HTTP | Implemented |
 | Moxa | 48 | Modbus TCP / HTTP | Implemented |
-| Honeywell | 35 | BACnet/IP (UDP 47808) | Planned |
+| Honeywell | 35 | BACnet/IP (UDP 47808) | Implemented |
 | Emerson | 34 | Modbus TCP (TCP 502) | Implemented |
 | Yokogawa | 30 | Modbus TCP (TCP 502) | Implemented |
 | Omron | 28 | FINS (UDP 9600) | Planned |
@@ -209,7 +213,7 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
 pkg/cli/banner.go          # Safety banner
-pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP, SLMP)
+pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP, SLMP, BACnet/IP)
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
 pkg/output/                # Text, CSV, JSON formatters

@@ -17,6 +17,7 @@ const (
 	ModeS7         DiscoveryMode = "s7"
 	ModeModbusTCP  DiscoveryMode = "modbus"
 	ModeMELSEC     DiscoveryMode = "melsec"
+	ModeBACnet     DiscoveryMode = "bacnet"
 	ModeAuto       DiscoveryMode = "auto"
 	ModeLegacyHTTP DiscoveryMode = "http"
 )
@@ -51,6 +52,8 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runModbusTCP(opts, ips)
 	case ModeMELSEC:
 		return runMELSEC(opts, ips)
+	case ModeBACnet:
+		return runBACnet(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
 	default:
@@ -120,9 +123,23 @@ func runMELSEC(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runBACnet(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("BACnet/IP discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverBACnet(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("BACnet/IP discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -134,6 +151,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	s7Ch := make(chan result, 1)
 	modbusCh := make(chan result, 1)
 	melsecCh := make(chan result, 1)
+	bacnetCh := make(chan result, 1)
 
 	go func() {
 		d, e := runCIP(opts, ips)
@@ -151,11 +169,16 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		d, e := runMELSEC(opts, ips)
 		melsecCh <- result{d, e}
 	}()
+	go func() {
+		d, e := runBACnet(opts, ips)
+		bacnetCh <- result{d, e}
+	}()
 
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
 	modbusResult := <-modbusCh
 	melsecResult := <-melsecCh
+	bacnetResult := <-bacnetCh
 
 	// Merge results, deduplicate by IP (prefer result with non-empty Model)
 	seen := make(map[string]inventory.Device)
@@ -177,6 +200,11 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 			seen[d.IP] = d
 		}
 	}
+	for _, d := range bacnetResult.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
 
 	devices := make([]inventory.Device, 0, len(seen))
 	for _, d := range seen {
@@ -188,7 +216,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	}
 
 	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil {
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil {
 		return devices, cipResult.err
 	}
 
