@@ -218,6 +218,8 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		mode = discover.ModeMELSEC
 	case "bacnet":
 		mode = discover.ModeBACnet
+	case "fins":
+		mode = discover.ModeFINS
 	case "http":
 		mode = discover.ModeLegacyHTTP
 	}
