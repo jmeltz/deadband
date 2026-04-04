@@ -6,7 +6,7 @@ deadband discovers industrial devices on your network and cross-references their
 
 ## Why
 
-There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs and their firmware versions" and outputs "here are the open CVEs against them." Tenable and Dragos do this inside licensed platforms. deadband does it for free, in a terminal, with no agent or sensor necessary.
+There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs and their firmware versions" and outputs "here are the open CVEs against them." deadband does it for free, in a terminal, with no agent or sensor necessary.
 
 ## Safety
 
