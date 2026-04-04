@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/diff"
 	"github.com/jmeltz/deadband/pkg/matcher"
 )
 
@@ -30,6 +31,26 @@ func NewWriter(w io.Writer, format string) (ResultWriter, error) {
 		return newCSVWriter(w), nil
 	case "json":
 		return newJSONWriter(w), nil
+	default:
+		return nil, fmt.Errorf("unsupported output format: %s", format)
+	}
+}
+
+// DiffWriter writes a diff report in a specific format.
+type DiffWriter interface {
+	WriteDiff(report *diff.DiffReport) error
+	Flush() error
+}
+
+// NewDiffWriter creates a DiffWriter for the given format.
+func NewDiffWriter(w io.Writer, format string) (DiffWriter, error) {
+	switch format {
+	case "text":
+		return &diffTextWriter{w: w}, nil
+	case "csv":
+		return newDiffCSVWriter(w), nil
+	case "json":
+		return &diffJSONWriter{w: w}, nil
 	default:
 		return nil, fmt.Errorf("unsupported output format: %s", format)
 	}

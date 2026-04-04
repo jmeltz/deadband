@@ -3,9 +3,20 @@ package discover
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/inventory"
+)
+
+// DiscoveryMode selects the discovery protocol.
+type DiscoveryMode string
+
+const (
+	ModeCIP        DiscoveryMode = "cip"
+	ModeS7         DiscoveryMode = "s7"
+	ModeAuto       DiscoveryMode = "auto"
+	ModeLegacyHTTP DiscoveryMode = "http"
 )
 
 type Opts struct {
@@ -13,17 +24,122 @@ type Opts struct {
 	Timeout     time.Duration
 	HTTPTimeout time.Duration
 	Concurrency int
+	Mode        DiscoveryMode
 	Progress    func(msg string)
 }
 
-// Run performs Rockwell EtherNet/IP device discovery on a CIDR range
-// and returns the results as inventory devices ready for matching.
+// Run performs device discovery on a CIDR range and returns inventory devices.
+// In Auto mode (default), probes both CIP and S7 protocols concurrently.
 func Run(opts Opts) ([]inventory.Device, error) {
+	if opts.Mode == "" {
+		opts.Mode = ModeAuto
+	}
+
 	ips, err := ExpandCIDR(opts.CIDR)
 	if err != nil {
 		return nil, err
 	}
 
+	switch opts.Mode {
+	case ModeCIP:
+		return runCIP(opts, ips)
+	case ModeS7:
+		return runS7(opts, ips)
+	case ModeLegacyHTTP:
+		return runHTTP(opts, ips)
+	default:
+		return runAuto(opts, ips)
+	}
+}
+
+func runCIP(opts Opts, ips []string) ([]inventory.Device, error) {
+	cidr := opts.CIDR
+	if !strings.Contains(cidr, "/") {
+		cidr += "/32"
+	}
+	broadcastAddr := broadcastAddrForCIDR(cidr)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("CIP ListIdentity discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverCIP(ips, broadcastAddr, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("CIP discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
+func runS7(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("S7comm discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverS7(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("S7comm discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
+func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7) on %d hosts...", len(ips)))
+	}
+
+	type result struct {
+		devices []inventory.Device
+		err     error
+	}
+
+	cipCh := make(chan result, 1)
+	s7Ch := make(chan result, 1)
+
+	go func() {
+		d, e := runCIP(opts, ips)
+		cipCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runS7(opts, ips)
+		s7Ch <- result{d, e}
+	}()
+
+	cipResult := <-cipCh
+	s7Result := <-s7Ch
+
+	// Merge results, deduplicate by IP (prefer result with non-empty Model)
+	seen := make(map[string]inventory.Device)
+	for _, d := range cipResult.devices {
+		seen[d.IP] = d
+	}
+	for _, d := range s7Result.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
+
+	devices := make([]inventory.Device, 0, len(seen))
+	for _, d := range seen {
+		devices = append(devices, d)
+	}
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Auto discovery found %d total devices", len(devices)))
+	}
+
+	// Return first non-nil error if both failed
+	if cipResult.err != nil && s7Result.err != nil {
+		return devices, cipResult.err
+	}
+
+	return devices, nil
+}
+
+func runHTTP(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
 		opts.Progress(fmt.Sprintf("Scanning %d hosts for port %d...", len(ips), EIPPort))
 	}

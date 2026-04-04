@@ -3,22 +3,43 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
 	"github.com/jmeltz/deadband/pkg/cli"
+	"github.com/jmeltz/deadband/pkg/diff"
 	"github.com/jmeltz/deadband/pkg/discover"
 	"github.com/jmeltz/deadband/pkg/inventory"
 	"github.com/jmeltz/deadband/pkg/matcher"
 	"github.com/jmeltz/deadband/pkg/output"
+	"github.com/jmeltz/deadband/pkg/server"
 	"github.com/jmeltz/deadband/pkg/updater"
 )
 
 func main() {
+	// Handle "serve" subcommand before flag.Parse()
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
+		addr := serveFlags.String("addr", ":8484", "Listen address (e.g. :8484)")
+		dbPath := serveFlags.String("db", advisory.DefaultDBPath(), "Path to advisory database")
+		serveFlags.Parse(os.Args[2:])
+
+		srv, err := server.New(*addr, *dbPath)
+		if err != nil {
+			log.Fatalf("[deadband] Error: %v", err)
+		}
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("[deadband] Error: %v", err)
+		}
+		return
+	}
+
 	var (
 		inventoryPath string
+		comparePath   string
 		inputFormat   string
 		dbPath        string
 		outputPath    string
@@ -31,14 +52,17 @@ func main() {
 		stats         bool
 		since         string
 		source        string
-		cidr          string
-		scanTimeout   time.Duration
-		httpTimeout   time.Duration
-		concurrency   int
+		cidr        string
+		scanMode    string
+		legacyHTTP  bool
+		scanTimeout time.Duration
+		httpTimeout time.Duration
+		concurrency int
 	)
 
 	flag.StringVar(&inventoryPath, "inventory", "", "Path to device inventory file (CSV, JSON, or flat)")
 	flag.StringVar(&inventoryPath, "i", "", "Path to device inventory file (alias for --inventory)")
+	flag.StringVar(&comparePath, "compare", "", "Path to second inventory file for diff mode")
 	flag.StringVar(&inputFormat, "format", "auto", "Input format: csv, json, flat, auto")
 	flag.StringVar(&dbPath, "db", advisory.DefaultDBPath(), "Path to advisory database cache")
 	flag.StringVar(&outputPath, "output", "-", "Output file path (- for stdout)")
@@ -54,8 +78,10 @@ func main() {
 	flag.StringVar(&source, "source", "", "Local CSAF mirror path (for air-gapped update)")
 
 	// Discovery flags
-	flag.StringVar(&cidr, "cidr", "", "Discover Rockwell devices on network (e.g. 10.0.1.0/24)")
-	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP port scan timeout")
+	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
+	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, http")
+	flag.BoolVar(&legacyHTTP, "legacy-http", false, "Use HTTP scraping (alias for --mode http)")
+	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP/UDP scan timeout")
 	flag.DurationVar(&httpTimeout, "http-timeout", 5*time.Second, "HTTP scrape timeout")
 	flag.IntVar(&concurrency, "concurrency", 50, "Concurrent scan workers")
 
@@ -64,7 +90,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ICS firmware vulnerability gap detector\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
-		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices and check against advisories\n")
+		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (Rockwell CIP + Siemens S7) and check\n")
+		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -84,11 +111,19 @@ func main() {
 	}
 
 	if cidr != "" {
-		devices := runDiscover(cidr, scanTimeout, httpTimeout, concurrency, dryRun)
+		if legacyHTTP {
+			scanMode = "http"
+		}
+		devices := runDiscover(cidr, scanMode, scanTimeout, httpTimeout, concurrency, dryRun)
 		if dryRun || len(devices) == 0 {
 			return
 		}
 		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter)
+		return
+	}
+
+	if inventoryPath != "" && comparePath != "" {
+		runDiff(inventoryPath, comparePath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter)
 		return
 	}
 
@@ -101,7 +136,7 @@ func main() {
 	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun)
 }
 
-func runDiscover(cidr string, scanTimeout, httpTimeout time.Duration, concurrency int, dryRun bool) []inventory.Device {
+func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Duration, concurrency int, dryRun bool) []inventory.Device {
 	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
 
 	ips, err := discover.ExpandCIDR(cidr)
@@ -110,8 +145,10 @@ func runDiscover(cidr string, scanTimeout, httpTimeout time.Duration, concurrenc
 		os.Exit(2)
 	}
 
+	mode := discover.DiscoveryMode(scanMode)
+
 	if dryRun {
-		fmt.Printf("[deadband] Dry run: would scan %d hosts on port %d\n", len(ips), discover.EIPPort)
+		fmt.Printf("[deadband] Dry run: would scan %d hosts (mode: %s)\n", len(ips), mode)
 		return nil
 	}
 
@@ -120,6 +157,7 @@ func runDiscover(cidr string, scanTimeout, httpTimeout time.Duration, concurrenc
 		Timeout:     scanTimeout,
 		HTTPTimeout: httpTimeout,
 		Concurrency: concurrency,
+		Mode:        mode,
 		Progress: func(msg string) {
 			fmt.Printf("[deadband] %s\n", msg)
 		},
@@ -131,7 +169,7 @@ func runDiscover(cidr string, scanTimeout, httpTimeout time.Duration, concurrenc
 		os.Exit(2)
 	}
 
-	fmt.Printf("[deadband] Discovered %d Rockwell devices\n", len(devices))
+	fmt.Printf("[deadband] Discovered %d devices\n", len(devices))
 
 	if len(devices) == 0 {
 		fmt.Println("[deadband] No devices found.")
@@ -254,6 +292,82 @@ func runStats(dbPath string) {
 	fmt.Println("[deadband] Vendors covered:")
 	for v, count := range vendors {
 		fmt.Printf("  %s: %d advisories\n", v, count)
+	}
+
+	addedSince, chronic := db.StalenessStats(db.PreviousUpdated)
+	if addedSince >= 0 {
+		fmt.Printf("[deadband] %d advisories added since last update\n", addedSince)
+	}
+	if chronic > 0 {
+		fmt.Printf("[deadband] %d chronic advisories (first seen >6 months ago)\n", chronic)
+	}
+}
+
+func runDiff(basePath, comparePath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string) {
+	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+
+	baseDevices, err := inventory.ParseFile(basePath, inputFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error loading base inventory: %v\n", err)
+		os.Exit(2)
+	}
+
+	compareDevices, err := inventory.ParseFile(comparePath, inputFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error loading compare inventory: %v\n", err)
+		os.Exit(2)
+	}
+
+	db, err := advisory.LoadDatabase(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
+		os.Exit(2)
+	}
+	fmt.Printf("[deadband] %s\n", db.Stats())
+	fmt.Printf("[deadband] Comparing %d (base) vs %d (compare) devices...\n", len(baseDevices), len(compareDevices))
+
+	conf := matcher.ParseConfidence(minConfidence)
+	opts := matcher.FilterOpts{
+		MinConfidence: conf,
+		MinCVSS:       minCVSS,
+		Vendor:        vendorFilter,
+	}
+
+	report := diff.Compute(baseDevices, compareDevices, db, opts)
+	report.BaseFile = basePath
+	report.CompareFile = comparePath
+
+	var w *os.File
+	if outputPath == "" || outputPath == "-" {
+		w = os.Stdout
+	} else {
+		w, err = os.Create(outputPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[deadband] Error creating output file: %v\n", err)
+			os.Exit(2)
+		}
+		defer w.Close()
+	}
+
+	fmt.Println()
+
+	writer, err := output.NewDiffWriter(w, outFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
+		os.Exit(2)
+	}
+
+	if err := writer.WriteDiff(report); err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
+		os.Exit(2)
+	}
+	if err := writer.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
+		os.Exit(2)
+	}
+
+	if len(report.NewVulnerabilities) > 0 {
+		os.Exit(1)
 	}
 }
 
