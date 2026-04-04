@@ -13,6 +13,7 @@ const (
 	EIPPort       = 44818
 	S7Port        = 102
 	ModbusTCPPort = 502
+	SLMPPort      = 5007
 )
 
 // ExpandCIDR returns all usable host IPs in a CIDR range.

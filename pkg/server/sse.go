@@ -214,6 +214,8 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		mode = discover.ModeS7
 	case "modbus":
 		mode = discover.ModeModbusTCP
+	case "melsec":
+		mode = discover.ModeMELSEC
 	case "http":
 		mode = discover.ModeLegacyHTTP
 	}
