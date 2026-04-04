@@ -15,6 +15,7 @@ type DiscoveryMode string
 const (
 	ModeCIP        DiscoveryMode = "cip"
 	ModeS7         DiscoveryMode = "s7"
+	ModeModbusTCP  DiscoveryMode = "modbus"
 	ModeAuto       DiscoveryMode = "auto"
 	ModeLegacyHTTP DiscoveryMode = "http"
 )
@@ -45,6 +46,8 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runCIP(opts, ips)
 	case ModeS7:
 		return runS7(opts, ips)
+	case ModeModbusTCP:
+		return runModbusTCP(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
 	default:
@@ -86,9 +89,23 @@ func runS7(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runModbusTCP(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Modbus TCP discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverModbusTCP(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Modbus TCP discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -98,6 +115,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 
 	cipCh := make(chan result, 1)
 	s7Ch := make(chan result, 1)
+	modbusCh := make(chan result, 1)
 
 	go func() {
 		d, e := runCIP(opts, ips)
@@ -107,9 +125,14 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		d, e := runS7(opts, ips)
 		s7Ch <- result{d, e}
 	}()
+	go func() {
+		d, e := runModbusTCP(opts, ips)
+		modbusCh <- result{d, e}
+	}()
 
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
+	modbusResult := <-modbusCh
 
 	// Merge results, deduplicate by IP (prefer result with non-empty Model)
 	seen := make(map[string]inventory.Device)
@@ -117,6 +140,11 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		seen[d.IP] = d
 	}
 	for _, d := range s7Result.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
+	for _, d := range modbusResult.devices {
 		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
 			seen[d.IP] = d
 		}
@@ -131,8 +159,8 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		opts.Progress(fmt.Sprintf("Auto discovery found %d total devices", len(devices)))
 	}
 
-	// Return first non-nil error if both failed
-	if cipResult.err != nil && s7Result.err != nil {
+	// Return first non-nil error if all failed
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil {
 		return devices, cipResult.err
 	}
 

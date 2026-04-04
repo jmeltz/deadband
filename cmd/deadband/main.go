@@ -79,7 +79,7 @@ func main() {
 
 	// Discovery flags
 	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
-	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, http")
+	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, http")
 	flag.BoolVar(&legacyHTTP, "legacy-http", false, "Use HTTP scraping (alias for --mode http)")
 	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP/UDP scan timeout")
 	flag.DurationVar(&httpTimeout, "http-timeout", 5*time.Second, "HTTP scrape timeout")
@@ -90,7 +90,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ICS firmware vulnerability gap detector\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
-		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (Rockwell CIP + Siemens S7) and check\n")
+		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (CIP + S7 + Modbus) and check\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n\n")

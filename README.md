@@ -30,6 +30,9 @@ bin/deadband --cidr 10.0.1.0/24
 # Scan for Siemens PLCs only
 bin/deadband --cidr 10.0.1.0/24 --mode s7
 
+# Scan Modbus TCP devices (Schneider, ABB, Delta, etc.)
+bin/deadband --cidr 10.0.1.0/24 --mode modbus
+
 # Or check a pre-collected inventory file
 bin/deadband --inventory devices.csv
 
@@ -67,7 +70,7 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
-| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `http` |
+| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `modbus`, `http` |
 | `--timeout` | `2s` | TCP/UDP scan timeout |
 | `--http-timeout` | `5s` | HTTP scrape timeout |
 | `--concurrency` | `50` | Concurrent scan workers |
@@ -161,8 +164,9 @@ cd web && npm run dev
 |----------|------|-----------|--------|
 | CIP/EIP ListIdentity | UDP 44818 | Rockwell Automation | Broadcast + unicast, extracts ProductName + firmware revision |
 | S7comm SZL Read | TCP 102 | Siemens (S7-300/400/1200/1500) | 3-phase handshake (COTP + S7 Setup + SZL 0x001C), extracts module name + firmware |
+| Modbus TCP Device ID | TCP 502 | Schneider Electric, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton | FC 43 / MEI 14 Read Device Identification, extracts vendor + model + firmware |
 
-Auto mode (`--mode auto`, the default) runs both protocols concurrently and merges results.
+Auto mode (`--mode auto`, the default) runs all three protocols concurrently and merges results.
 
 ## Scanning Roadmap
 
@@ -172,19 +176,19 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 |--------|-----------|----------|--------|
 | Siemens | 979 | S7comm (TCP 102) | Implemented |
 | Rockwell Automation | 229 | CIP/EIP (UDP 44818) | Implemented |
-| Schneider Electric | 224 | Modbus TCP (TCP 502) | Planned |
-| Hitachi Energy / ABB | 167 | Modbus TCP (TCP 502) | Planned |
+| Schneider Electric | 224 | Modbus TCP (TCP 502) | Implemented |
+| Hitachi Energy / ABB | 167 | Modbus TCP (TCP 502) | Implemented |
 | Mitsubishi Electric | 115 | MELSEC/SLMP (TCP 5007) | Planned |
-| Delta Electronics | 94 | Modbus TCP (TCP 502) | Planned |
-| Advantech | 78 | Modbus TCP / HTTP | Planned |
-| Moxa | 48 | Modbus TCP / HTTP | Planned |
+| Delta Electronics | 94 | Modbus TCP (TCP 502) | Implemented |
+| Advantech | 78 | Modbus TCP / HTTP | Implemented |
+| Moxa | 48 | Modbus TCP / HTTP | Implemented |
 | Honeywell | 35 | BACnet/IP (UDP 47808) | Planned |
-| Emerson | 34 | Modbus TCP (TCP 502) | Planned |
-| Yokogawa | 30 | Modbus TCP (TCP 502) | Planned |
+| Emerson | 34 | Modbus TCP (TCP 502) | Implemented |
+| Yokogawa | 30 | Modbus TCP (TCP 502) | Implemented |
 | Omron | 28 | FINS (UDP 9600) | Planned |
 | GE / GE Vernova | 28 | GE-SRTP (TCP 18245) | Planned |
-| Phoenix Contact | 23 | Modbus TCP (TCP 502) | Planned |
-| WAGO | 11 | Modbus TCP (TCP 502) | Planned |
+| Phoenix Contact | 23 | Modbus TCP (TCP 502) | Implemented |
+| WAGO | 11 | Modbus TCP (TCP 502) | Implemented |
 
 ### Protocol priority
 
@@ -201,7 +205,7 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
 pkg/cli/banner.go          # Safety banner
-pkg/discover/              # Multi-protocol device discovery (CIP, S7comm)
+pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP)
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
 pkg/output/                # Text, CSV, JSON formatters

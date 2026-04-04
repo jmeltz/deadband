@@ -54,6 +54,7 @@ export default function DiscoverPage() {
               <option value="auto">Auto (all protocols)</option>
               <option value="cip">CIP (Rockwell)</option>
               <option value="s7">S7 (Siemens)</option>
+              <option value="modbus">Modbus TCP (SE/ABB/+)</option>
               <option value="http">HTTP (Legacy)</option>
             </select>
           </div>
