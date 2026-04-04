@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
@@ -53,34 +55,83 @@ func Update(opts UpdateOpts) (*advisory.Database, error) {
 		for _, a := range existing.Advisories {
 			existingMap[a.ID] = a
 		}
+		// Migrate old entries that lack FirstSeen: backfill with previous update time
+		for id, a := range existingMap {
+			if a.FirstSeen == nil {
+				t := existing.Updated
+				a.FirstSeen = &t
+				existingMap[id] = a
+			}
+		}
 	}
 
+	now := time.Now().UTC()
 	total := len(paths)
-	var fetched int
-	for i, p := range paths {
-		if opts.Progress != nil && (i%50 == 0 || i == total-1) {
-			opts.Progress(fmt.Sprintf("Fetching advisory %d of %d...", i+1, total))
-		}
 
-		doc, err := fetchAdvisory(opts.Source, p)
-		if err != nil {
+	// Fetch advisories concurrently with 100 workers
+	type result struct {
+		advisories []advisory.Advisory
+		err        error
+		path       string
+	}
+
+	work := make(chan string, len(paths))
+	results := make(chan result, len(paths))
+	var done atomic.Int64
+
+	workers := 100
+	if len(paths) < workers {
+		workers = len(paths)
+	}
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range work {
+				doc, err := fetchAdvisory(opts.Source, p)
+				if err != nil {
+					results <- result{path: p, err: err}
+				} else {
+					results <- result{advisories: parseCSAF(doc), path: p}
+				}
+				n := done.Add(1)
+				if opts.Progress != nil && (n%100 == 0 || int(n) == total) {
+					opts.Progress(fmt.Sprintf("Fetched %d of %d advisories...", n, total))
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for _, p := range paths {
+			work <- p
+		}
+		close(work)
+		wg.Wait()
+		close(results)
+	}()
+
+	var fetched int
+	for r := range results {
+		if r.err != nil {
 			if opts.Progress != nil {
-				opts.Progress(fmt.Sprintf("Warning: skipping %s: %v", p, err))
+				opts.Progress(fmt.Sprintf("Warning: skipping %s: %v", r.path, r.err))
 			}
 			continue
 		}
-
-		advisories := parseCSAF(doc)
-		for _, a := range advisories {
-			existingMap[a.ID] = a
-		}
+		existingMap = mergeAdvisories(existingMap, r.advisories, now)
 		fetched++
 	}
 
 	// Build final DB
 	db := &advisory.Database{
-		Updated: time.Now().UTC(),
+		Updated: now,
 		Source:  "cisagov/CSAF",
+	}
+	if existing != nil {
+		db.PreviousUpdated = &existing.Updated
 	}
 	for _, a := range existingMap {
 		db.Advisories = append(db.Advisories, a)
@@ -227,6 +278,21 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		URL:              url,
 		Published:        published,
 	}}
+}
+
+// mergeAdvisories merges a batch of newly fetched advisories into the existing map,
+// preserving FirstSeen for known IDs and setting it for new ones.
+func mergeAdvisories(existing map[string]advisory.Advisory, fetched []advisory.Advisory, now time.Time) map[string]advisory.Advisory {
+	for _, a := range fetched {
+		if prev, ok := existing[a.ID]; ok {
+			a.FirstSeen = prev.FirstSeen
+		} else {
+			a.FirstSeen = &now
+		}
+		a.LastSeen = &now
+		existing[a.ID] = a
+	}
+	return existing
 }
 
 func filterPathsBySince(paths []string, since string) []string {

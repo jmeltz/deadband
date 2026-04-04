@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const EIPPort = 44818
+const (
+	EIPPort = 44818
+	S7Port  = 102
+)
 
 // ExpandCIDR returns all usable host IPs in a CIDR range.
 // Single IPs without a mask are treated as /32.

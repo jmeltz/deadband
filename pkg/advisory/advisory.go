@@ -9,21 +9,24 @@ import (
 )
 
 type Database struct {
-	Updated    time.Time  `json:"updated"`
-	Source     string     `json:"source"`
-	Advisories []Advisory `json:"advisories"`
+	Updated         time.Time  `json:"updated"`
+	PreviousUpdated *time.Time `json:"previous_updated,omitempty"`
+	Source          string     `json:"source"`
+	Advisories      []Advisory `json:"advisories"`
 }
 
 type Advisory struct {
-	ID               string   `json:"id"`
-	Title            string   `json:"title"`
-	Vendor           string   `json:"vendor"`
-	Products         []string `json:"products"`
-	AffectedVersions []string `json:"affected_versions"`
-	CVSSv3Max        float64  `json:"cvss_v3_max"`
-	CVEs             []string `json:"cves"`
-	URL              string   `json:"url"`
-	Published        string   `json:"published"`
+	ID               string     `json:"id"`
+	Title            string     `json:"title"`
+	Vendor           string     `json:"vendor"`
+	Products         []string   `json:"products"`
+	AffectedVersions []string   `json:"affected_versions"`
+	CVSSv3Max        float64    `json:"cvss_v3_max"`
+	CVEs             []string   `json:"cves"`
+	URL              string     `json:"url"`
+	Published        string     `json:"published"`
+	FirstSeen        *time.Time `json:"first_seen,omitempty"`
+	LastSeen         *time.Time `json:"last_seen,omitempty"`
 }
 
 func DefaultDBPath() string {
@@ -68,4 +71,23 @@ func SaveDatabase(path string, db *Database) error {
 func (db *Database) Stats() string {
 	return fmt.Sprintf("Advisory DB: %d advisories, last updated %s, source: %s",
 		len(db.Advisories), db.Updated.Format("2006-01-02"), db.Source)
+}
+
+// StalenessStats returns the number of advisories added since the given time
+// and the number of chronic advisories (first seen more than 6 months ago).
+// If since is nil, addedSince is returned as -1 (unknown).
+func (db *Database) StalenessStats(since *time.Time) (addedSince int, chronic int) {
+	sixMonthsAgo := time.Now().Add(-6 * 30 * 24 * time.Hour)
+	if since == nil {
+		addedSince = -1
+	}
+	for _, a := range db.Advisories {
+		if since != nil && a.FirstSeen != nil && a.FirstSeen.After(*since) {
+			addedSince++
+		}
+		if a.FirstSeen != nil && a.FirstSeen.Before(sixMonthsAgo) {
+			chronic++
+		}
+	}
+	return
 }

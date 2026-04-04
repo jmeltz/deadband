@@ -1,8 +1,8 @@
 # deadband
 
-**Firmware vulnerability detector for Rockwell ICS/OT assets**
+**Firmware vulnerability gap detector for ICS/OT assets**
 
-deadband discovers Rockwell Automation devices on your network and cross-references their firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface known CVEs. It can also accept pre-collected inventory files (CSV/JSON) from [rockwell-discovery](https://github.com/jmeltz/rockwell-discovery) or other sources.
+deadband discovers industrial devices on your network and cross-references their firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface known CVEs. It actively scans for Rockwell Automation (CIP/EIP) and Siemens (S7comm) devices, and can also accept pre-collected inventory files (CSV/JSON) from any vendor.
 
 ## Why
 
@@ -10,7 +10,7 @@ There is no lightweight, offline-capable CLI tool that accepts "here are my PLCs
 
 ## Safety
 
-- **Read-only by construction** - discovery uses only TCP port probes and HTTP GET (no CIP writes)
+- **Read-only by construction** - discovery uses only identity reads and port probes (no CIP writes, no S7 writes)
 - **Conservative and safe** - no external API calls at runtime; advisory data is fetched/cached separately
 - **Transparent** - prints a safety banner on startup, uses only public CISA data (TLP:WHITE)
 - **Scriptable** - structured output, meaningful exit codes
@@ -24,8 +24,11 @@ make deadband
 # Fetch advisory database (one-time, requires internet)
 bin/deadband --update
 
-# Discover and check in one shot
+# Discover and check (auto mode: scans CIP + S7 in parallel)
 bin/deadband --cidr 10.0.1.0/24
+
+# Scan for Siemens PLCs only
+bin/deadband --cidr 10.0.1.0/24 --mode s7
 
 # Or check a pre-collected inventory file
 bin/deadband --inventory devices.csv
@@ -64,7 +67,8 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
-| `--timeout` | `2s` | TCP port scan timeout |
+| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `http` |
+| `--timeout` | `2s` | TCP/UDP scan timeout |
 | `--http-timeout` | `5s` | HTTP scrape timeout |
 | `--concurrency` | `50` | Concurrent scan workers |
 
@@ -127,17 +131,83 @@ For fully air-gapped environments, point `--source` at a local CSAF mirror:
 bin/deadband --update --source ./local-csaf-mirror/
 ```
 
+## Web UI
+
+deadband includes an optional web frontend built with Next.js (embedded in the Go binary):
+
+```bash
+# Build with embedded frontend
+make deadband-web
+
+# Serve API + UI on http://localhost:8484
+bin/deadband serve
+```
+
+The UI provides a dashboard, advisory browser, vulnerability check, network discovery, inventory diff, and database management — all with a dark industrial aesthetic.
+
+For development, run the Go API and Next.js dev server separately:
+
+```bash
+# Terminal 1: API server
+go run ./cmd/deadband serve
+
+# Terminal 2: Frontend with hot reload (proxies /api/* to :8484)
+cd web && npm run dev
+```
+
+## Active Scanning Protocols
+
+| Protocol | Port | Vendor(s) | Method |
+|----------|------|-----------|--------|
+| CIP/EIP ListIdentity | UDP 44818 | Rockwell Automation | Broadcast + unicast, extracts ProductName + firmware revision |
+| S7comm SZL Read | TCP 102 | Siemens (S7-300/400/1200/1500) | 3-phase handshake (COTP + S7 Setup + SZL 0x001C), extracts module name + firmware |
+
+Auto mode (`--mode auto`, the default) runs both protocols concurrently and merges results.
+
+## Scanning Roadmap
+
+deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendors. The top vendors by advisory count and their scanning status:
+
+| Vendor | Advisories | Protocol | Status |
+|--------|-----------|----------|--------|
+| Siemens | 979 | S7comm (TCP 102) | Implemented |
+| Rockwell Automation | 229 | CIP/EIP (UDP 44818) | Implemented |
+| Schneider Electric | 224 | Modbus TCP (TCP 502) | Planned |
+| Hitachi Energy / ABB | 167 | Modbus TCP (TCP 502) | Planned |
+| Mitsubishi Electric | 115 | MELSEC/SLMP (TCP 5007) | Planned |
+| Delta Electronics | 94 | Modbus TCP (TCP 502) | Planned |
+| Advantech | 78 | Modbus TCP / HTTP | Planned |
+| Moxa | 48 | Modbus TCP / HTTP | Planned |
+| Honeywell | 35 | BACnet/IP (UDP 47808) | Planned |
+| Emerson | 34 | Modbus TCP (TCP 502) | Planned |
+| Yokogawa | 30 | Modbus TCP (TCP 502) | Planned |
+| Omron | 28 | FINS (UDP 9600) | Planned |
+| GE / GE Vernova | 28 | GE-SRTP (TCP 18245) | Planned |
+| Phoenix Contact | 23 | Modbus TCP (TCP 502) | Planned |
+| WAGO | 11 | Modbus TCP (TCP 502) | Planned |
+
+### Protocol priority
+
+1. **Modbus TCP Device ID** (Function 43/14) — single implementation covers Schneider, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton (~600 advisories)
+2. **MELSEC/SLMP** — Mitsubishi Electric (~115 advisories)
+3. **HTTP fingerprinting** — extensible regex scraper for web-exposed devices across all vendors
+4. **FINS** — Omron (~28 advisories)
+5. **BACnet/IP** — building automation (Johnson Controls, Honeywell, ~75 advisories)
+6. **GE-SRTP** — GE Vernova (~28 advisories)
+
 ## Project Structure
 
 ```
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
 pkg/cli/banner.go          # Safety banner
-pkg/discover/              # Rockwell EtherNet/IP device discovery
+pkg/discover/              # Multi-protocol device discovery (CIP, S7comm)
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
 pkg/output/                # Text, CSV, JSON formatters
+pkg/server/                # HTTP API + embedded frontend
 pkg/updater/               # CISA CSAF fetch and cache
+web/                       # Next.js frontend (static export)
 ```
 
 ## License
