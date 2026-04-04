@@ -18,6 +18,8 @@ var vendorAliases = map[string][]string{
 	"WAGO":                {"wago"},
 	"Delta Electronics":   {"delta", "delta electronics"},
 	"Beckhoff":            {"beckhoff", "beckhoff automation"},
+	"Trane":               {"trane", "trane technologies"},
+	"Johnson Controls":    {"johnson controls", "jci"},
 }
 
 var reverseAliases map[string]string

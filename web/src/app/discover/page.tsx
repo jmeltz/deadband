@@ -56,6 +56,7 @@ export default function DiscoverPage() {
               <option value="s7">S7 (Siemens)</option>
               <option value="modbus">Modbus TCP (SE/ABB/+)</option>
               <option value="melsec">MELSEC (Mitsubishi)</option>
+              <option value="bacnet">BACnet/IP (Trane/Honeywell)</option>
               <option value="http">HTTP (Legacy)</option>
             </select>
           </div>
