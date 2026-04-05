@@ -42,6 +42,9 @@ bin/deadband --cidr 10.0.1.0/24 --mode bacnet
 # Scan Omron PLCs via FINS
 bin/deadband --cidr 10.0.1.0/24 --mode fins
 
+# Scan Emerson/GE PACSystems via SRTP
+bin/deadband --cidr 10.0.1.0/24 --mode srtp
+
 # Or check a pre-collected inventory file
 bin/deadband --inventory devices.csv
 
@@ -79,7 +82,7 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
-| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `modbus`, `melsec`, `bacnet`, `fins`, `http` |
+| `--mode` | `auto` | Discovery mode: `auto`, `cip`, `s7`, `modbus`, `melsec`, `bacnet`, `fins`, `srtp`, `http` |
 | `--timeout` | `2s` | TCP/UDP scan timeout |
 | `--http-timeout` | `5s` | HTTP scrape timeout |
 | `--concurrency` | `50` | Concurrent scan workers |
@@ -177,8 +180,9 @@ cd web && npm run dev
 | MELSEC/SLMP | TCP 5007 | Mitsubishi Electric (iQ-R, iQ-F, Q, L, FX5) | Read Type Name (command 0x0101), extracts CPU model name |
 | BACnet/IP | UDP 47808 | Trane, Honeywell, Johnson Controls, Carrier, Daikin | Who-Is + ReadProperty, extracts vendor ID + model + firmware |
 | FINS | UDP 9600 | Omron (CJ, CP, CS, NJ, NX) | Controller Data Read (0501), extracts CPU model + firmware version |
+| GE-SRTP | TCP 18245 | Emerson / GE (PACSystems, Series 90, VersaMax) | INIT handshake + Controller Type Read (0x43), extracts controller model |
 
-Auto mode (`--mode auto`, the default) runs all six protocols concurrently and merges results.
+Auto mode (`--mode auto`, the default) runs all seven protocols concurrently and merges results.
 
 ## Scanning Roadmap
 
@@ -195,10 +199,9 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 | Advantech | 78 | Modbus TCP / HTTP | Implemented |
 | Moxa | 48 | Modbus TCP / HTTP | Implemented |
 | Honeywell | 35 | BACnet/IP (UDP 47808) | Implemented |
-| Emerson | 34 | Modbus TCP (TCP 502) | Implemented |
+| Emerson / GE | 62 | Modbus TCP + GE-SRTP | Implemented |
 | Yokogawa | 30 | Modbus TCP (TCP 502) | Implemented |
 | Omron | 28 | FINS (UDP 9600) | Implemented |
-| GE / GE Vernova | 28 | GE-SRTP (TCP 18245) | Planned |
 | Phoenix Contact | 23 | Modbus TCP (TCP 502) | Implemented |
 | WAGO | 11 | Modbus TCP (TCP 502) | Implemented |
 
@@ -209,7 +212,7 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 3. **HTTP fingerprinting** — extensible regex scraper for web-exposed devices across all vendors
 4. **FINS** — Omron (~28 advisories)
 5. **BACnet/IP** — building automation (Johnson Controls, Honeywell, ~75 advisories)
-6. **GE-SRTP** — GE Vernova (~28 advisories)
+6. **GE-SRTP** — Emerson / GE (~28 advisories) ✅
 
 ## Project Structure
 
@@ -217,7 +220,7 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
 pkg/cli/banner.go          # Safety banner
-pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP, SLMP, BACnet/IP, FINS)
+pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP, SLMP, BACnet/IP, FINS, GE-SRTP)
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
 pkg/output/                # Text, CSV, JSON formatters

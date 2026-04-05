@@ -79,7 +79,7 @@ func main() {
 
 	// Discovery flags
 	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
-	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, melsec, bacnet, fins, http")
+	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, melsec, bacnet, fins, srtp, http")
 	flag.BoolVar(&legacyHTTP, "legacy-http", false, "Use HTTP scraping (alias for --mode http)")
 	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP/UDP scan timeout")
 	flag.DurationVar(&httpTimeout, "http-timeout", 5*time.Second, "HTTP scrape timeout")
