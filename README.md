@@ -1,6 +1,6 @@
 # deadband
 
-**Firmware vulnerability gap detector for ICS/OT assets**
+**Free, offline ICS/OT firmware vulnerability matching against 3,600+ CISA advisories**
 
 deadband discovers industrial devices on your network and cross-references their firmware versions against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed to surface known CVEs. It actively scans for Rockwell Automation (CIP/EIP) and Siemens (S7comm) devices, and can also accept pre-collected inventory files (CSV/JSON) from any vendor.
 
