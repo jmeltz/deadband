@@ -16,6 +16,7 @@ const (
 	SLMPPort      = 5007
 	BACnetPort    = 47808
 	FINSPort      = 9600
+	SRTPPort      = 18245
 )
 
 // ExpandCIDR returns all usable host IPs in a CIDR range.

@@ -19,6 +19,7 @@ const (
 	ModeMELSEC     DiscoveryMode = "melsec"
 	ModeBACnet     DiscoveryMode = "bacnet"
 	ModeFINS       DiscoveryMode = "fins"
+	ModeSRTP       DiscoveryMode = "srtp"
 	ModeAuto       DiscoveryMode = "auto"
 	ModeLegacyHTTP DiscoveryMode = "http"
 )
@@ -57,6 +58,8 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runBACnet(opts, ips)
 	case ModeFINS:
 		return runFINS(opts, ips)
+	case ModeSRTP:
+		return runSRTP(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
 	default:
@@ -154,9 +157,23 @@ func runFINS(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runSRTP(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("GE-SRTP discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverSRTP(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("GE-SRTP discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet + FINS) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet + FINS + SRTP) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -170,6 +187,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	melsecCh := make(chan result, 1)
 	bacnetCh := make(chan result, 1)
 	finsCh := make(chan result, 1)
+	srtpCh := make(chan result, 1)
 
 	go func() {
 		d, e := runCIP(opts, ips)
@@ -195,6 +213,10 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		d, e := runFINS(opts, ips)
 		finsCh <- result{d, e}
 	}()
+	go func() {
+		d, e := runSRTP(opts, ips)
+		srtpCh <- result{d, e}
+	}()
 
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
@@ -202,6 +224,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	melsecResult := <-melsecCh
 	bacnetResult := <-bacnetCh
 	finsResult := <-finsCh
+	srtpResult := <-srtpCh
 
 	// Merge results, deduplicate by IP (prefer result with non-empty Model)
 	seen := make(map[string]inventory.Device)
@@ -233,6 +256,11 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 			seen[d.IP] = d
 		}
 	}
+	for _, d := range srtpResult.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
 
 	devices := make([]inventory.Device, 0, len(seen))
 	for _, d := range seen {
@@ -244,7 +272,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	}
 
 	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil && finsResult.err != nil {
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil && finsResult.err != nil && srtpResult.err != nil {
 		return devices, cipResult.err
 	}
 

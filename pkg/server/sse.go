@@ -220,6 +220,8 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		mode = discover.ModeBACnet
 	case "fins":
 		mode = discover.ModeFINS
+	case "srtp":
+		mode = discover.ModeSRTP
 	case "http":
 		mode = discover.ModeLegacyHTTP
 	}
