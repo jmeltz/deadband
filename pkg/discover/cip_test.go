@@ -85,9 +85,9 @@ func buildTestResponse() []byte {
 
 func TestParseListIdentityResponse(t *testing.T) {
 	data := buildTestResponse()
-	id, err := parseListIdentityResponse(data)
+	id, err := ParseListIdentityResponse(data)
 	if err != nil {
-		t.Fatalf("parseListIdentityResponse: %v", err)
+		t.Fatalf("ParseListIdentityResponse: %v", err)
 	}
 
 	if id.VendorID != 1 {
@@ -118,7 +118,7 @@ func TestParseListIdentityResponse(t *testing.T) {
 
 func TestParseListIdentityResponse_TooShort(t *testing.T) {
 	data := make([]byte, 10)
-	_, err := parseListIdentityResponse(data)
+	_, err := ParseListIdentityResponse(data)
 	if err == nil {
 		t.Error("expected error for short response, got nil")
 	}
@@ -127,7 +127,7 @@ func TestParseListIdentityResponse_TooShort(t *testing.T) {
 func TestParseListIdentityResponse_WrongCommand(t *testing.T) {
 	data := make([]byte, 30)
 	binary.LittleEndian.PutUint16(data[0:2], 0x0065) // RegisterSession, not ListIdentity
-	_, err := parseListIdentityResponse(data)
+	_, err := ParseListIdentityResponse(data)
 	if err == nil {
 		t.Error("expected error for wrong command, got nil")
 	}
@@ -140,7 +140,7 @@ func TestIdentityToDevice(t *testing.T) {
 		RevMajor:    11,
 		RevMinor:    2,
 	}
-	dev := identityToDevice("10.0.1.1", id)
+	dev := CIPIdentityToDevice("10.0.1.1", id)
 
 	if dev.IP != "10.0.1.1" {
 		t.Errorf("IP = %q, want %q", dev.IP, "10.0.1.1")
@@ -163,10 +163,114 @@ func TestIdentityToDevice_UnknownVendor(t *testing.T) {
 		RevMajor:    1,
 		RevMinor:    0,
 	}
-	dev := identityToDevice("10.0.1.2", id)
+	dev := CIPIdentityToDevice("10.0.1.2", id)
 
 	if dev.Vendor != "Vendor(9999)" {
 		t.Errorf("Vendor = %q, want %q", dev.Vendor, "Vendor(9999)")
+	}
+}
+
+// buildIdentityReply constructs a CIP Get Attributes All reply for the Identity Object.
+func buildIdentityReply(vendorID, deviceType, productCode uint16, revMajor, revMinor uint8, serial uint32, productName string) []byte {
+	// CIP reply header: service(1) + reserved(1) + status(1) + addl_status_size(1)
+	reply := []byte{cipServiceGetAttrAll | 0x80, 0x00, 0x00, 0x00}
+
+	attr := make([]byte, 15+len(productName))
+	binary.LittleEndian.PutUint16(attr[0:2], vendorID)
+	binary.LittleEndian.PutUint16(attr[2:4], deviceType)
+	binary.LittleEndian.PutUint16(attr[4:6], productCode)
+	attr[6] = revMajor
+	attr[7] = revMinor
+	binary.LittleEndian.PutUint16(attr[8:10], 0x0030) // status word
+	binary.LittleEndian.PutUint32(attr[10:14], serial)
+	attr[14] = byte(len(productName))
+	copy(attr[15:], productName)
+
+	return append(reply, attr...)
+}
+
+func TestParseCIPIdentityReply_Controller(t *testing.T) {
+	data := buildIdentityReply(1, 14, 55, 20, 55, 0x12345678, "1756-L72/B")
+	mod, err := parseCIPIdentityReply(data, 0)
+	if err != nil {
+		t.Fatalf("parseCIPIdentityReply: %v", err)
+	}
+	if mod.Slot != 0 {
+		t.Errorf("Slot = %d, want 0", mod.Slot)
+	}
+	if mod.VendorID != 1 {
+		t.Errorf("VendorID = %d, want 1", mod.VendorID)
+	}
+	if mod.ProductName != "1756-L72/B" {
+		t.Errorf("ProductName = %q, want %q", mod.ProductName, "1756-L72/B")
+	}
+	if mod.RevMajor != 20 || mod.RevMinor != 55 {
+		t.Errorf("Rev = %d.%d, want 20.55", mod.RevMajor, mod.RevMinor)
+	}
+}
+
+func TestParseCIPIdentityReply_IOModule(t *testing.T) {
+	data := buildIdentityReply(1, 7, 100, 3, 4, 0xAABBCCDD, "1756-IB16/A")
+	mod, err := parseCIPIdentityReply(data, 3)
+	if err != nil {
+		t.Fatalf("parseCIPIdentityReply: %v", err)
+	}
+	if mod.Slot != 3 {
+		t.Errorf("Slot = %d, want 3", mod.Slot)
+	}
+	if mod.ProductName != "1756-IB16/A" {
+		t.Errorf("ProductName = %q, want %q", mod.ProductName, "1756-IB16/A")
+	}
+}
+
+func TestParseCIPIdentityReply_ErrorStatus(t *testing.T) {
+	// General status 0x05 = path destination unknown (empty slot)
+	data := []byte{0x81, 0x00, 0x05, 0x00}
+	_, err := parseCIPIdentityReply(data, 7)
+	if err == nil {
+		t.Error("expected error for non-zero general status, got nil")
+	}
+}
+
+func TestParseCIPIdentityReply_CMReply(t *testing.T) {
+	// Connection Manager reply (0xD2) wrapping a successful Get Attr All response
+	inner := buildIdentityReply(1, 14, 55, 11, 1, 0x11111111, "1756-EN2T/D")
+	outer := []byte{cipServiceUnconnectedSend | 0x80, 0x00, 0x00, 0x00}
+	outer = append(outer, inner...)
+
+	mod, err := parseCIPIdentityReply(outer, 4)
+	if err != nil {
+		t.Fatalf("parseCIPIdentityReply (CM wrapped): %v", err)
+	}
+	if mod.ProductName != "1756-EN2T/D" {
+		t.Errorf("ProductName = %q, want %q", mod.ProductName, "1756-EN2T/D")
+	}
+	if mod.RevMajor != 11 || mod.RevMinor != 1 {
+		t.Errorf("Rev = %d.%d, want 11.1", mod.RevMajor, mod.RevMinor)
+	}
+}
+
+func TestBackplaneModuleToDevice(t *testing.T) {
+	mod := &BackplaneModule{
+		Slot:        0,
+		VendorID:    1,
+		ProductName: "1756-L72/B",
+		RevMajor:    20,
+		RevMinor:    55,
+	}
+	dev := BackplaneModuleToDevice("10.0.1.1", mod)
+
+	if dev.IP != "10.0.1.1" {
+		t.Errorf("IP = %q, want %q", dev.IP, "10.0.1.1")
+	}
+	if dev.Vendor != "Rockwell Automation" {
+		t.Errorf("Vendor = %q, want %q", dev.Vendor, "Rockwell Automation")
+	}
+	if dev.Model != "1756-L72/B" {
+		t.Errorf("Model = %q, want %q", dev.Model, "1756-L72/B")
+	}
+	if dev.Firmware != "20.055" {
+		t.Errorf("Firmware = %q, want %q", dev.Firmware, "20.055")
 	}
 }
 
