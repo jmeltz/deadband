@@ -12,8 +12,12 @@ import (
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/asset"
+	"github.com/jmeltz/deadband/pkg/baseline"
 	"github.com/jmeltz/deadband/pkg/cli"
+	"github.com/jmeltz/deadband/pkg/compliance"
 	"github.com/jmeltz/deadband/pkg/diff"
+	"github.com/jmeltz/deadband/pkg/enrichment"
 	"github.com/jmeltz/deadband/pkg/inventory"
 	"github.com/jmeltz/deadband/pkg/matcher"
 )
@@ -69,11 +73,16 @@ type checkDeviceResult struct {
 }
 
 type checkAdvisory struct {
-	ID     string   `json:"id"`
-	CVEs   []string `json:"cves"`
-	CVSSv3 float64  `json:"cvss_v3"`
-	Title  string   `json:"title"`
-	URL    string   `json:"url"`
+	ID             string   `json:"id"`
+	CVEs           []string `json:"cves"`
+	CVSSv3         float64  `json:"cvss_v3"`
+	Title          string   `json:"title"`
+	URL            string   `json:"url"`
+	KEV            bool     `json:"kev"`
+	KEVRansomware  bool     `json:"kev_ransomware,omitempty"`
+	EPSSScore      float64  `json:"epss_score,omitempty"`
+	EPSSPercentile float64  `json:"epss_percentile,omitempty"`
+	RiskScore      float64  `json:"risk_score"`
 }
 
 type checkSummary struct {
@@ -216,16 +225,41 @@ func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, a)
 	}
 
-	// Sort
-	switch sortField {
+	// Sort — field:dir format (e.g. "cvss:desc", "vendor:asc")
+	sortParts := strings.SplitN(sortField, ":", 2)
+	sortKey := sortParts[0]
+	sortAsc := len(sortParts) > 1 && sortParts[1] == "asc"
+
+	switch sortKey {
 	case "cvss":
-		sort.Slice(filtered, func(i, j int) bool { return filtered[i].CVSSv3Max > filtered[j].CVSSv3Max })
+		sort.Slice(filtered, func(i, j int) bool {
+			if sortAsc {
+				return filtered[i].CVSSv3Max < filtered[j].CVSSv3Max
+			}
+			return filtered[i].CVSSv3Max > filtered[j].CVSSv3Max
+		})
 	case "published":
-		sort.Slice(filtered, func(i, j int) bool { return filtered[i].Published > filtered[j].Published })
+		sort.Slice(filtered, func(i, j int) bool {
+			if sortAsc {
+				return filtered[i].Published < filtered[j].Published
+			}
+			return filtered[i].Published > filtered[j].Published
+		})
 	case "id":
-		sort.Slice(filtered, func(i, j int) bool { return filtered[i].ID > filtered[j].ID })
+		sort.Slice(filtered, func(i, j int) bool {
+			if sortAsc {
+				return filtered[i].ID < filtered[j].ID
+			}
+			return filtered[i].ID > filtered[j].ID
+		})
+	case "vendor":
+		sort.Slice(filtered, func(i, j int) bool {
+			if sortAsc {
+				return strings.ToLower(filtered[i].Vendor) < strings.ToLower(filtered[j].Vendor)
+			}
+			return strings.ToLower(filtered[i].Vendor) > strings.ToLower(filtered[j].Vendor)
+		})
 	default:
-		// Default: most recently published first
 		sort.Slice(filtered, func(i, j int) bool { return filtered[i].Published > filtered[j].Published })
 	}
 
@@ -248,11 +282,29 @@ func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type advisoryDetailResponse struct {
+	advisory.Advisory
+	KEV            bool    `json:"kev"`
+	KEVRansomware  bool    `json:"kev_ransomware,omitempty"`
+	EPSSScore      float64 `json:"epss_score,omitempty"`
+	EPSSPercentile float64 `json:"epss_percentile,omitempty"`
+	RiskScore      float64 `json:"risk_score"`
+}
+
 func (s *Server) handleAdvisory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	for _, a := range s.db.Advisories {
 		if strings.EqualFold(a.ID, id) {
-			writeJSON(w, http.StatusOK, a)
+			resp := advisoryDetailResponse{Advisory: a}
+			if s.edb != nil && s.edb.Loaded() {
+				ae := s.edb.EnrichAdvisory(a.CVEs, a.CVSSv3Max)
+				resp.KEV = ae.KEV
+				resp.KEVRansomware = ae.KEVRansomware
+				resp.EPSSScore = ae.MaxEPSS
+				resp.EPSSPercentile = ae.MaxEPSSPercent
+				resp.RiskScore = ae.RiskScore
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 	}
@@ -364,6 +416,14 @@ func (s *Server) handleDiffUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, buildDiffResponse(report))
 }
 
+func (s *Server) handleEnrichmentStats(w http.ResponseWriter, r *http.Request) {
+	if s.edb == nil {
+		writeJSON(w, http.StatusOK, enrichment.Stats{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.edb.GetStats())
+}
+
 // --- Helpers ---
 
 func (s *Server) runCheck(devices []inventory.Device, minConfidence string, minCVSS float64, vendor string) checkResponse {
@@ -392,13 +452,22 @@ func (s *Server) runCheck(devices []inventory.Device, minConfidence string, minC
 			Confidence: confidence,
 		}
 		for _, m := range r.Matches {
-			dr.Advisories = append(dr.Advisories, checkAdvisory{
+			ca := checkAdvisory{
 				ID:     m.Advisory.ID,
 				CVEs:   m.Advisory.CVEs,
 				CVSSv3: m.Advisory.CVSSv3Max,
 				Title:  strings.TrimSpace(m.Advisory.Title),
 				URL:    m.Advisory.URL,
-			})
+			}
+			if s.edb != nil && s.edb.Loaded() {
+				ae := s.edb.EnrichAdvisory(m.Advisory.CVEs, m.Advisory.CVSSv3Max)
+				ca.KEV = ae.KEV
+				ca.KEVRansomware = ae.KEVRansomware
+				ca.EPSSScore = ae.MaxEPSS
+				ca.EPSSPercentile = ae.MaxEPSSPercent
+				ca.RiskScore = ae.RiskScore
+			}
+			dr.Advisories = append(dr.Advisories, ca)
 		}
 		resp.Results = append(resp.Results, dr)
 
@@ -479,6 +548,302 @@ func parseUploadedInventory(r *http.Request, fieldName string) ([]inventory.Devi
 	tmp.Close()
 
 	return inventory.ParseFile(tmp.Name(), "auto")
+}
+
+type baselineResponse struct {
+	Exists    bool                `json:"exists"`
+	UpdatedAt string              `json:"updated_at,omitempty"`
+	Devices   []inventory.Device  `json:"devices,omitempty"`
+	Count     int                 `json:"count"`
+}
+
+func (s *Server) handleGetBaseline(w http.ResponseWriter, r *http.Request) {
+	path := baseline.DefaultPath()
+	b, err := baseline.Load(path)
+	if err != nil {
+		writeJSON(w, http.StatusOK, baselineResponse{Exists: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, baselineResponse{
+		Exists:    true,
+		UpdatedAt: b.UpdatedAt.Format(time.RFC3339),
+		Devices:   b.Devices,
+		Count:     len(b.Devices),
+	})
+}
+
+func (s *Server) handleSaveBaseline(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Devices []inventory.Device `json:"devices"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if len(req.Devices) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "no devices provided"})
+		return
+	}
+
+	b := baseline.NewFromDevices(req.Devices)
+	path := baseline.DefaultPath()
+	if err := baseline.Save(path, b); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("saving baseline: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, baselineResponse{
+		Exists:    true,
+		UpdatedAt: b.UpdatedAt.Format(time.RFC3339),
+		Count:     len(b.Devices),
+	})
+}
+
+func (s *Server) handleCompareBaseline(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Devices       []inventory.Device `json:"devices"`
+		MinConfidence string             `json:"min_confidence"`
+		MinCVSS       float64            `json:"min_cvss"`
+		Vendor        string             `json:"vendor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if len(req.Devices) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "no devices provided"})
+		return
+	}
+
+	conf := matcher.ParseConfidence(req.MinConfidence)
+	opts := matcher.FilterOpts{MinConfidence: conf, MinCVSS: req.MinCVSS, Vendor: req.Vendor}
+
+	path := baseline.DefaultPath()
+	report, err := baseline.Compare(path, req.Devices, s.db, opts)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: fmt.Sprintf("baseline comparison: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, buildDiffResponse(report))
+}
+
+type complianceMappingsResponse struct {
+	Frameworks []string                    `json:"frameworks"`
+	Mappings   []compliance.ControlMapping `json:"mappings"`
+}
+
+func handleComplianceMappings(w http.ResponseWriter, r *http.Request) {
+	framework := r.URL.Query().Get("framework")
+	var mappings []compliance.ControlMapping
+	if framework == "" {
+		mappings = compliance.AllMappings()
+	} else {
+		frameworks := strings.Split(framework, ",")
+		mappings = compliance.ForFrameworks(frameworks)
+	}
+	writeJSON(w, http.StatusOK, complianceMappingsResponse{
+		Frameworks: compliance.Frameworks(),
+		Mappings:   mappings,
+	})
+}
+
+// --- Asset handlers ---
+
+type assetListResponse struct {
+	Total  int           `json:"total"`
+	Assets []asset.Asset `json:"assets"`
+	// Facets for filter dropdowns
+	Sites []string `json:"sites"`
+	Zones []string `json:"zones"`
+	Tags  []string `json:"tags"`
+}
+
+func (s *Server) handleGetAssets(w http.ResponseWriter, r *http.Request) {
+	store := asset.LoadOrEmpty(asset.DefaultPath())
+
+	q := r.URL.Query()
+	sortParts := strings.SplitN(q.Get("sort"), ":", 2)
+	sortField := sortParts[0]
+	sortAsc := len(sortParts) > 1 && sortParts[1] == "asc"
+
+	opts := asset.FilterOpts{
+		Vendor:      q.Get("vendor"),
+		Site:        q.Get("site"),
+		Zone:        q.Get("zone"),
+		Criticality: q.Get("criticality"),
+		Tag:         q.Get("tag"),
+		Search:      q.Get("q"),
+		SortField:   sortField,
+		SortAsc:     sortAsc,
+	}
+
+	filtered := store.Filter(opts)
+	sites, zones, tags := store.DistinctValues()
+
+	writeJSON(w, http.StatusOK, assetListResponse{
+		Total:  len(filtered),
+		Assets: filtered,
+		Sites:  sites,
+		Zones:  zones,
+		Tags:   tags,
+	})
+}
+
+type assetImportRequest struct {
+	Devices []inventory.Device `json:"devices"`
+	Source  string             `json:"source"`
+}
+
+func (s *Server) handleImportAssets(w http.ResponseWriter, r *http.Request) {
+	var req assetImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if len(req.Devices) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "no devices provided"})
+		return
+	}
+	if req.Source == "" {
+		req.Source = "manual"
+	}
+
+	path := asset.DefaultPath()
+	store := asset.LoadOrEmpty(path)
+	result := store.Import(req.Devices, req.Source)
+
+	if err := asset.Save(path, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("saving assets: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleUpdateAsset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var patch asset.AssetPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+
+	path := asset.DefaultPath()
+	store := asset.LoadOrEmpty(path)
+
+	if !store.Update(id, patch) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "asset not found"})
+		return
+	}
+
+	if err := asset.Save(path, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("saving assets: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, store.Get(id))
+}
+
+func (s *Server) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	path := asset.DefaultPath()
+	store := asset.LoadOrEmpty(path)
+
+	if !store.Delete(id) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "asset not found"})
+		return
+	}
+
+	if err := asset.Save(path, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("saving assets: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type bulkTagRequest struct {
+	IDs    []string `json:"ids"`
+	AddTags    []string `json:"add_tags,omitempty"`
+	RemoveTags []string `json:"remove_tags,omitempty"`
+	SetSite    *string  `json:"set_site,omitempty"`
+	SetZone    *string  `json:"set_zone,omitempty"`
+	SetCriticality *string `json:"set_criticality,omitempty"`
+}
+
+func (s *Server) handleBulkUpdateAssets(w http.ResponseWriter, r *http.Request) {
+	var req bulkTagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "no asset IDs provided"})
+		return
+	}
+
+	path := asset.DefaultPath()
+	store := asset.LoadOrEmpty(path)
+
+	updated := 0
+	idSet := make(map[string]bool, len(req.IDs))
+	for _, id := range req.IDs {
+		idSet[id] = true
+	}
+
+	for i := range store.Assets {
+		if !idSet[store.Assets[i].ID] {
+			continue
+		}
+		a := &store.Assets[i]
+		if req.SetSite != nil {
+			a.Site = *req.SetSite
+		}
+		if req.SetZone != nil {
+			a.Zone = *req.SetZone
+		}
+		if req.SetCriticality != nil {
+			a.Criticality = *req.SetCriticality
+		}
+		for _, t := range req.AddTags {
+			if !hasTag(a.Tags, t) {
+				a.Tags = append(a.Tags, t)
+			}
+		}
+		for _, t := range req.RemoveTags {
+			a.Tags = removeTag(a.Tags, t)
+		}
+		updated++
+	}
+
+	if err := asset.Save(path, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("saving assets: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"updated": updated})
+}
+
+func hasTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if strings.EqualFold(t, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func removeTag(tags []string, tag string) []string {
+	out := tags[:0]
+	for _, t := range tags {
+		if !strings.EqualFold(t, tag) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

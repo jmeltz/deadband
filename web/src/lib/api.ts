@@ -132,6 +132,72 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body || {}),
     }),
+
+  enrichmentStats: () =>
+    request<import("./types").EnrichmentStats>("/api/enrichment/stats"),
+
+  assets: (params?: {
+    vendor?: string;
+    site?: string;
+    zone?: string;
+    criticality?: string;
+    tag?: string;
+    q?: string;
+    sort?: string;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.vendor) search.set("vendor", params.vendor);
+    if (params?.site) search.set("site", params.site);
+    if (params?.zone) search.set("zone", params.zone);
+    if (params?.criticality) search.set("criticality", params.criticality);
+    if (params?.tag) search.set("tag", params.tag);
+    if (params?.q) search.set("q", params.q);
+    if (params?.sort) search.set("sort", params.sort);
+    return request<import("./types").AssetListResponse>(
+      `/api/assets?${search}`,
+    );
+  },
+
+  importAssets: (body: {
+    devices: import("./types").Device[];
+    source?: string;
+  }) =>
+    request<import("./types").AssetImportResult>("/api/assets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAsset: (id: string, patch: Partial<import("./types").Asset>) =>
+    request<import("./types").Asset>(`/api/assets/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+
+  deleteAsset: (id: string) =>
+    request<{ status: string }>(`/api/assets/${id}`, {
+      method: "DELETE",
+    }),
+
+  bulkUpdateAssets: (body: {
+    ids: string[];
+    add_tags?: string[];
+    remove_tags?: string[];
+    set_site?: string;
+    set_zone?: string;
+    set_criticality?: string;
+  }) =>
+    request<{ updated: number }>("/api/assets/bulk", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  complianceMappings: (framework?: string) => {
+    const search = new URLSearchParams();
+    if (framework) search.set("framework", framework);
+    return request<import("./types").ComplianceMappingsResponse>(
+      `/api/compliance/mappings?${search}`,
+    );
+  },
 };
 
 export function sseStream(
