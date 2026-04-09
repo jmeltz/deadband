@@ -11,10 +11,10 @@ import (
 )
 
 type Device struct {
-	IP       string
-	Vendor   string
-	Model    string
-	Firmware string
+	IP       string `json:"ip"`
+	Vendor   string `json:"vendor"`
+	Model    string `json:"model"`
+	Firmware string `json:"firmware"`
 }
 
 func ParseFile(path string, format string) ([]Device, error) {
