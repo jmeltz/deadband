@@ -3,14 +3,17 @@ package server
 import (
 	"log"
 	"net/http"
+	"path/filepath"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
 	"github.com/jmeltz/deadband/pkg/cli"
+	"github.com/jmeltz/deadband/pkg/enrichment"
 )
 
 // Server is the deadband HTTP API server.
 type Server struct {
 	db     *advisory.Database
+	edb    *enrichment.DB
 	dbPath string
 	addr   string
 	mux    *http.ServeMux
@@ -26,8 +29,12 @@ func New(addr, dbPath string) (*Server, error) {
 		db = &advisory.Database{}
 	}
 
+	// Load enrichment data (KEV/EPSS) from same directory as advisory DB
+	edb := enrichment.LoadFromDir(filepath.Dir(dbPath))
+
 	s := &Server{
 		db:     db,
+		edb:    edb,
 		dbPath: dbPath,
 		addr:   addr,
 		mux:    http.NewServeMux(),
@@ -55,6 +62,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/diff/upload", s.handleDiffUpload)
 	s.mux.HandleFunc("POST /api/update", s.handleUpdate)
 	s.mux.HandleFunc("GET /api/update/events", s.handleUpdateEvents)
+	s.mux.HandleFunc("GET /api/enrichment/stats", s.handleEnrichmentStats)
+	s.mux.HandleFunc("GET /api/compliance/mappings", handleComplianceMappings)
+	s.mux.HandleFunc("GET /api/baseline", s.handleGetBaseline)
+	s.mux.HandleFunc("POST /api/baseline", s.handleSaveBaseline)
+	s.mux.HandleFunc("POST /api/baseline/compare", s.handleCompareBaseline)
+	s.mux.HandleFunc("GET /api/assets", s.handleGetAssets)
+	s.mux.HandleFunc("POST /api/assets", s.handleImportAssets)
+	s.mux.HandleFunc("PUT /api/assets/{id}", s.handleUpdateAsset)
+	s.mux.HandleFunc("DELETE /api/assets/{id}", s.handleDeleteAsset)
+	s.mux.HandleFunc("POST /api/assets/bulk", s.handleBulkUpdateAssets)
 
 	// Serve embedded frontend if available
 	mountFrontend(s.mux)
@@ -68,12 +85,13 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.addr, handler)
 }
 
-// reloadDB reloads the advisory database from disk.
+// reloadDB reloads the advisory database and enrichment data from disk.
 func (s *Server) reloadDB() error {
 	db, err := advisory.LoadDatabase(s.dbPath)
 	if err != nil {
 		return err
 	}
 	s.db = db
+	s.edb = enrichment.LoadFromDir(filepath.Dir(s.dbPath))
 	return nil
 }

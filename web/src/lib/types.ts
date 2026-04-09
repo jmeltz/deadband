@@ -15,8 +15,28 @@ export interface Advisory {
   cves: string[];
   url: string;
   published: string;
+  summary?: string;
+  weaknesses?: Weakness[];
+  sectors?: string[];
+  remediations?: Remediation[];
   first_seen?: string;
   last_seen?: string;
+  kev?: boolean;
+  kev_ransomware?: boolean;
+  epss_score?: number;
+  epss_percentile?: number;
+  risk_score?: number;
+}
+
+export interface Weakness {
+  id: string;
+  name: string;
+}
+
+export interface Remediation {
+  category: string;
+  details: string;
+  url?: string;
 }
 
 export type Confidence = "HIGH" | "MEDIUM" | "LOW";
@@ -28,6 +48,11 @@ export interface CheckAdvisory {
   cvss_v3: number;
   title: string;
   url: string;
+  kev: boolean;
+  kev_ransomware?: boolean;
+  epss_score?: number;
+  epss_percentile?: number;
+  risk_score: number;
 }
 
 export interface CheckDeviceResult {
@@ -114,6 +139,60 @@ export interface HealthResponse {
   status: string;
   version: string;
   db_loaded: boolean;
+}
+
+export interface EnrichmentStats {
+  kev_count: number;
+  kev_date: string;
+  epss_count: number;
+  epss_date: string;
+  epss_version: string;
+}
+
+export interface ControlMapping {
+  framework: string;
+  control_id: string;
+  control_name: string;
+  capability: string;
+  rationale: string;
+}
+
+export interface ComplianceMappingsResponse {
+  frameworks: string[];
+  mappings: ControlMapping[];
+}
+
+export type Criticality = "critical" | "high" | "medium" | "low" | "";
+
+export interface Asset {
+  id: string;
+  ip: string;
+  vendor: string;
+  model: string;
+  firmware: string;
+  name: string;
+  site: string;
+  zone: string;
+  criticality: Criticality;
+  tags: string[];
+  notes: string;
+  first_seen: string;
+  last_seen: string;
+  source: string;
+}
+
+export interface AssetListResponse {
+  total: number;
+  assets: Asset[];
+  sites: string[];
+  zones: string[];
+  tags: string[];
+}
+
+export interface AssetImportResult {
+  added: number;
+  updated: number;
+  total: number;
 }
 
 export interface DiscoverJob {

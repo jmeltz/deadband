@@ -7,10 +7,10 @@ import { cn } from "@/lib/utils/cn";
 const nav = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
   { href: "/devices", label: "Devices", icon: DevicesIcon },
+  { href: "/assets", label: "Assets", icon: AssetsIcon },
   { href: "/advisories", label: "Advisories", icon: AdvisoriesIcon },
-  { href: "/check", label: "Check", icon: CheckIcon },
-  { href: "/discover", label: "Discover", icon: DiscoverIcon },
   { href: "/diff", label: "Diff", icon: DiffIcon },
+  { href: "/compliance", label: "Compliance", icon: ComplianceIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -21,9 +21,7 @@ export function Sidebar() {
     <aside className="w-56 shrink-0 border-r border-db-border bg-db-bg flex flex-col">
       <div className="px-4 py-5 border-b border-db-border">
         <Link href="/" className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded bg-db-teal flex items-center justify-center">
-            <span className="font-heading text-sm font-bold text-white">db</span>
-          </div>
+          <img src="/logo.png" alt="deadband" className="w-8 h-8 shrink-0" />
           <div>
             <h1 className="font-heading text-base font-semibold text-db-text leading-tight">
               deadband
@@ -44,9 +42,9 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors",
+                "flex items-center gap-2.5 px-3 py-2 rounded-sm text-sm transition-colors",
                 active
-                  ? "bg-db-teal-dim text-db-teal-light font-medium"
+                  ? "bg-db-teal-dim text-db-teal-light font-medium nav-active-glow"
                   : "text-db-muted hover:text-db-text hover:bg-db-surface",
               )}
             >
@@ -96,28 +94,32 @@ function AdvisoriesIcon({ className }: { className?: string }) {
   );
 }
 
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <circle cx="8" cy="8" r="6.5" />
-      <path d="M5 8l2 2 4-4" />
-    </svg>
-  );
-}
-
-function DiscoverIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <circle cx="7" cy="7" r="5" />
-      <path d="M11 11l3.5 3.5" />
-    </svg>
-  );
-}
-
 function DiffIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M4 1v14M12 1v14M1 8h14" />
+    </svg>
+  );
+}
+
+function ComplianceIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M8 1L2 4v4c0 3.5 2.5 6.2 6 7 3.5-.8 6-3.5 6-7V4L8 1z" />
+      <path d="M5.5 8l2 2 3-3.5" />
+    </svg>
+  );
+}
+
+function AssetsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="2" y="1" width="12" height="4" rx="1" />
+      <rect x="2" y="6" width="12" height="4" rx="1" />
+      <rect x="2" y="11" width="12" height="4" rx="1" />
+      <circle cx="5" cy="3" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="8" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="13" r="0.75" fill="currentColor" stroke="none" />
     </svg>
   );
 }
