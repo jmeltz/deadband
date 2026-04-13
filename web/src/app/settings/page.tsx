@@ -101,7 +101,7 @@ export default function SettingsPage() {
         {progress.length > 0 && (
           <div
             ref={logRef}
-            className="h-40 overflow-auto p-3 font-mono text-xs leading-relaxed bg-db-bg rounded-md mt-3"
+            className="h-40 overflow-auto p-3 font-mono text-xs leading-relaxed bg-db-bg rounded-sm mt-3 code-scanline"
           >
             {progress.map((msg, i) => (
               <div key={i} className={msg.startsWith("Error") ? "text-status-critical" : "text-status-ok/80"}>
@@ -129,7 +129,7 @@ export default function SettingsPage() {
             </thead>
             <tbody>
               {vendorList.map(([vendor, count]) => (
-                <tr key={vendor} className="border-b border-db-border/50">
+                <tr key={vendor} className="border-b border-db-border/50 table-row-hover">
                   <td className="py-2 text-xs text-db-text">{vendor}</td>
                   <td className="py-2 text-xs text-db-muted text-right font-mono">{count}</td>
                 </tr>
