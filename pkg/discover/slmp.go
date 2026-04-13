@@ -81,8 +81,8 @@ func buildReadTypeNameRequest() []byte {
 
 // --- Parsers ---
 
-// parseSLMPResponse validates an SLMP 3E binary response and returns the end code and payload.
-func parseSLMPResponse(data []byte) (endCode uint16, payload []byte, err error) {
+// ParseSLMPResponse validates an SLMP 3E binary response and returns the end code and payload.
+func ParseSLMPResponse(data []byte) (endCode uint16, payload []byte, err error) {
 	if len(data) < 11 {
 		return 0, nil, fmt.Errorf("SLMP response too short: %d bytes", len(data))
 	}
@@ -105,11 +105,11 @@ func parseSLMPResponse(data []byte) (endCode uint16, payload []byte, err error) 
 	return endCode, payload, nil
 }
 
-// parseReadTypeNameResponse extracts the CPU model name from a Read Type Name response.
+// ParseReadTypeNameResponse extracts the CPU model name from a Read Type Name response.
 // The response payload is a 16-byte space/null-padded ASCII model name,
 // optionally followed by a 2-byte CPU type code.
-func parseReadTypeNameResponse(data []byte) (*SLMPIdentity, error) {
-	endCode, payload, err := parseSLMPResponse(data)
+func ParseReadTypeNameResponse(data []byte) (*SLMPIdentity, error) {
+	endCode, payload, err := ParseSLMPResponse(data)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func SLMPIdentify(ip string, timeout time.Duration) (*SLMPIdentity, error) {
 		return nil, nil
 	}
 
-	id, err := parseReadTypeNameResponse(buf[:n])
+	id, err := ParseReadTypeNameResponse(buf[:n])
 	if err != nil {
 		return nil, nil
 	}
@@ -169,8 +169,8 @@ func SLMPIdentify(ip string, timeout time.Duration) (*SLMPIdentity, error) {
 	return id, nil
 }
 
-// slmpIdentityToDevice converts an SLMPIdentity to an inventory.Device.
-func slmpIdentityToDevice(ip string, id *SLMPIdentity) inventory.Device {
+// SLMPIdentityToDevice converts an SLMPIdentity to an inventory.Device.
+func SLMPIdentityToDevice(ip string, id *SLMPIdentity) inventory.Device {
 	return inventory.Device{
 		IP:     ip,
 		Vendor: "Mitsubishi Electric",
@@ -215,7 +215,7 @@ func discoverSLMP(ips []string, timeout time.Duration, concurrency int, progress
 				return
 			}
 
-			dev := slmpIdentityToDevice(ip, id)
+			dev := SLMPIdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()

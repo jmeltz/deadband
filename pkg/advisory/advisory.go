@@ -16,17 +16,32 @@ type Database struct {
 }
 
 type Advisory struct {
-	ID               string     `json:"id"`
-	Title            string     `json:"title"`
-	Vendor           string     `json:"vendor"`
-	Products         []string   `json:"products"`
-	AffectedVersions []string   `json:"affected_versions"`
-	CVSSv3Max        float64    `json:"cvss_v3_max"`
-	CVEs             []string   `json:"cves"`
-	URL              string     `json:"url"`
-	Published        string     `json:"published"`
-	FirstSeen        *time.Time `json:"first_seen,omitempty"`
-	LastSeen         *time.Time `json:"last_seen,omitempty"`
+	ID               string        `json:"id"`
+	Title            string        `json:"title"`
+	Vendor           string        `json:"vendor"`
+	Products         []string      `json:"products"`
+	AffectedVersions []string      `json:"affected_versions"`
+	CVSSv3Max        float64       `json:"cvss_v3_max"`
+	CVEs             []string      `json:"cves"`
+	URL              string        `json:"url"`
+	Published        string        `json:"published"`
+	Summary          string        `json:"summary,omitempty"`
+	Weaknesses       []Weakness    `json:"weaknesses,omitempty"`
+	Sectors          []string      `json:"sectors,omitempty"`
+	Remediations     []Remediation `json:"remediations,omitempty"`
+	FirstSeen        *time.Time    `json:"first_seen,omitempty"`
+	LastSeen         *time.Time    `json:"last_seen,omitempty"`
+}
+
+type Weakness struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type Remediation struct {
+	Category string `json:"category"`
+	Details  string `json:"details"`
+	URL      string `json:"url,omitempty"`
 }
 
 func DefaultDBPath() string {

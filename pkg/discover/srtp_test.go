@@ -94,7 +94,7 @@ func TestParseSRTPServiceResponse(t *testing.T) {
 		inline := []byte{0x60, 0x00, 0x01, 0x02, 0x03, 0x04}
 		resp := buildTestSRTPResponse(srtpMsgShortACK, inline)
 
-		data, err := parseSRTPServiceResponse(resp)
+		data, err := ParseSRTPServiceResponse(resp)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -108,7 +108,7 @@ func TestParseSRTPServiceResponse(t *testing.T) {
 
 	t.Run("error response", func(t *testing.T) {
 		resp := buildTestSRTPResponse(srtpMsgShortErr, nil)
-		_, err := parseSRTPServiceResponse(resp)
+		_, err := ParseSRTPServiceResponse(resp)
 		if err == nil {
 			t.Fatal("expected error for SHORT_ERR")
 		}
@@ -118,14 +118,14 @@ func TestParseSRTPServiceResponse(t *testing.T) {
 		resp := make([]byte, 56)
 		resp[0] = 0x02 // REQUEST, not REQUEST_ACK
 		resp[31] = srtpMsgShortACK
-		_, err := parseSRTPServiceResponse(resp)
+		_, err := ParseSRTPServiceResponse(resp)
 		if err == nil {
 			t.Fatal("expected error for wrong packet type")
 		}
 	})
 
 	t.Run("too short", func(t *testing.T) {
-		_, err := parseSRTPServiceResponse(make([]byte, 10))
+		_, err := ParseSRTPServiceResponse(make([]byte, 10))
 		if err == nil {
 			t.Fatal("expected error for short response")
 		}
@@ -142,7 +142,7 @@ func TestParseSRTPServiceResponse(t *testing.T) {
 		// Extended payload
 		copy(resp[56:], []byte("EXTDATA!"))
 
-		data, err := parseSRTPServiceResponse(resp)
+		data, err := ParseSRTPServiceResponse(resp)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -178,7 +178,7 @@ func TestParseControllerTypeData(t *testing.T) {
 			payload := make([]byte, 6)
 			binary.LittleEndian.PutUint16(payload[0:2], tt.typeCode)
 
-			id := parseControllerTypeData(payload)
+			id := ParseControllerTypeData(payload)
 			if id.TypeCode != tt.typeCode {
 				t.Errorf("TypeCode = 0x%04X, want 0x%04X", id.TypeCode, tt.typeCode)
 			}
@@ -191,7 +191,7 @@ func TestParseControllerTypeData(t *testing.T) {
 	t.Run("unknown type code", func(t *testing.T) {
 		payload := make([]byte, 6)
 		binary.LittleEndian.PutUint16(payload[0:2], 0xFF)
-		id := parseControllerTypeData(payload)
+		id := ParseControllerTypeData(payload)
 		if id.Model != "PLC (type 0x00FF)" {
 			t.Errorf("Model = %q, want %q", id.Model, "PLC (type 0x00FF)")
 		}
@@ -199,14 +199,14 @@ func TestParseControllerTypeData(t *testing.T) {
 
 	t.Run("zero type code", func(t *testing.T) {
 		payload := make([]byte, 6)
-		id := parseControllerTypeData(payload)
+		id := ParseControllerTypeData(payload)
 		if id.Model != "PLC" {
 			t.Errorf("Model = %q, want %q", id.Model, "PLC")
 		}
 	})
 
 	t.Run("short payload", func(t *testing.T) {
-		id := parseControllerTypeData([]byte{0x01})
+		id := ParseControllerTypeData([]byte{0x01})
 		if id.Model != "PLC" {
 			t.Errorf("Model = %q, want %q", id.Model, "PLC")
 		}
@@ -232,19 +232,19 @@ func TestParseProgramNameData(t *testing.T) {
 }
 
 func TestSRTPControllerName(t *testing.T) {
-	if got := srtpControllerName(0x60); got != "PACSystems RX3i (IC695)" {
+	if got := SRTPControllerName(0x60); got != "PACSystems RX3i (IC695)" {
 		t.Errorf("0x60 = %q, want PACSystems RX3i (IC695)", got)
 	}
-	if got := srtpControllerName(0x00); got != "PLC" {
+	if got := SRTPControllerName(0x00); got != "PLC" {
 		t.Errorf("0x00 = %q, want PLC", got)
 	}
-	if got := srtpControllerName(0xAB); got != "PLC (type 0x00AB)" {
+	if got := SRTPControllerName(0xAB); got != "PLC (type 0x00AB)" {
 		t.Errorf("0xAB = %q, want PLC (type 0x00AB)", got)
 	}
 }
 
 func TestSRTPIdentityToDevice(t *testing.T) {
-	dev := srtpIdentityToDevice("10.0.1.100", &SRTPIdentity{
+	dev := SRTPIdentityToDevice("10.0.1.100", &SRTPIdentity{
 		TypeCode: 0x60,
 		Model:    "PACSystems RX3i (IC695)",
 	})
@@ -263,12 +263,12 @@ func TestSRTPFullResponseParsing(t *testing.T) {
 	// Build a complete SHORT_ACK response with RX3i type code
 	resp := buildTestSRTPResponse(srtpMsgShortACK, []byte{0x62, 0x00, 0x00, 0x00, 0x00, 0x00})
 
-	data, err := parseSRTPServiceResponse(resp)
+	data, err := ParseSRTPServiceResponse(resp)
 	if err != nil {
-		t.Fatalf("parseSRTPServiceResponse: %v", err)
+		t.Fatalf("ParseSRTPServiceResponse: %v", err)
 	}
 
-	id := parseControllerTypeData(data)
+	id := ParseControllerTypeData(data)
 	if id.TypeCode != 0x62 {
 		t.Errorf("TypeCode = 0x%04X, want 0x0062", id.TypeCode)
 	}

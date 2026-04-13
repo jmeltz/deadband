@@ -107,8 +107,8 @@ func buildReadPropertyRequest(invokeID byte, deviceInstance uint32, propertyID u
 
 // --- Parsers ---
 
-// parseBVLC validates the BVLC header and returns the function code and payload.
-func parseBVLC(data []byte) (function byte, payload []byte, err error) {
+// ParseBVLC validates the BVLC header and returns the function code and payload.
+func ParseBVLC(data []byte) (function byte, payload []byte, err error) {
 	if len(data) < 4 {
 		return 0, nil, fmt.Errorf("BVLC too short: %d bytes", len(data))
 	}
@@ -123,9 +123,9 @@ func parseBVLC(data []byte) (function byte, payload []byte, err error) {
 	return function, data[4:length], nil
 }
 
-// parseIAmResponse parses an I-Am unconfirmed response from the APDU payload.
+// ParseIAmResponse parses an I-Am unconfirmed response from the APDU payload.
 // Returns the device instance and vendor ID.
-func parseIAmResponse(apdu []byte) (deviceInstance uint32, vendorID uint16, err error) {
+func ParseIAmResponse(apdu []byte) (deviceInstance uint32, vendorID uint16, err error) {
 	if len(apdu) < 2 {
 		return 0, 0, fmt.Errorf("APDU too short for I-Am")
 	}
@@ -202,7 +202,7 @@ func parseIAmResponse(apdu []byte) (deviceInstance uint32, vendorID uint16, err 
 // parseReadPropertyResponse parses a Complex-Ack ReadProperty response.
 // Returns the string value for CharacterString properties, or raw bytes description.
 func parseReadPropertyResponse(data []byte) (string, error) {
-	_, payload, err := parseBVLC(data)
+	_, payload, err := ParseBVLC(data)
 	if err != nil {
 		return "", err
 	}
@@ -309,7 +309,7 @@ func parseApplicationValue(data []byte) (string, error) {
 
 // --- Vendor ID mapping ---
 
-// bacnetVendorName maps a BACnet vendor ID to the canonical vendor name
+// BACnetVendorName maps a BACnet vendor ID to the canonical vendor name
 // used in the CISA advisory database.
 var bacnetVendorMap = map[uint16]string{
 	5:   "Johnson Controls",
@@ -324,7 +324,7 @@ var bacnetVendorMap = map[uint16]string{
 	555: "Automated Logic",
 }
 
-func bacnetVendorName(vendorID uint16) string {
+func BACnetVendorName(vendorID uint16) string {
 	if name, ok := bacnetVendorMap[vendorID]; ok {
 		return name
 	}
@@ -358,7 +358,7 @@ func BACnetIdentify(ip string, timeout time.Duration) (*BACnetIdentity, error) {
 		return nil, nil
 	}
 
-	_, payload, err := parseBVLC(buf[:n])
+	_, payload, err := ParseBVLC(buf[:n])
 	if err != nil {
 		return nil, nil
 	}
@@ -368,14 +368,14 @@ func BACnetIdentify(ip string, timeout time.Duration) (*BACnetIdentity, error) {
 
 	// NPDU (2 bytes min) + APDU
 	apdu := payload[2:]
-	deviceInstance, vendorID, err := parseIAmResponse(apdu)
+	deviceInstance, vendorID, err := ParseIAmResponse(apdu)
 	if err != nil {
 		return nil, nil
 	}
 
 	id := &BACnetIdentity{
 		VendorID:       vendorID,
-		VendorName:     bacnetVendorName(vendorID),
+		VendorName:     BACnetVendorName(vendorID),
 		DeviceInstance: deviceInstance,
 	}
 
@@ -404,8 +404,8 @@ func BACnetIdentify(ip string, timeout time.Duration) (*BACnetIdentity, error) {
 	return id, nil
 }
 
-// bacnetIdentityToDevice converts a BACnetIdentity to an inventory.Device.
-func bacnetIdentityToDevice(ip string, id *BACnetIdentity) inventory.Device {
+// BACnetIdentityToDevice converts a BACnetIdentity to an inventory.Device.
+func BACnetIdentityToDevice(ip string, id *BACnetIdentity) inventory.Device {
 	return inventory.Device{
 		IP:       ip,
 		Vendor:   id.VendorName,
@@ -441,7 +441,7 @@ func discoverBACnet(ips []string, timeout time.Duration, concurrency int, progre
 				return
 			}
 
-			dev := bacnetIdentityToDevice(ip, id)
+			dev := BACnetIdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()

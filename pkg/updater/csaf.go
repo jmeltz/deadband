@@ -12,6 +12,13 @@ type csafDocument struct {
 	Title      string          `json:"title"`
 	Tracking   csafTracking    `json:"tracking"`
 	References []csafReference `json:"references"`
+	Notes      []csafNote      `json:"notes,omitempty"`
+}
+
+type csafNote struct {
+	Category string `json:"category"`
+	Title    string `json:"title,omitempty"`
+	Text     string `json:"text"`
 }
 
 type csafTracking struct {
@@ -47,9 +54,23 @@ type csafProductHelpers struct {
 }
 
 type csafVulnerability struct {
-	CVE           string             `json:"cve"`
-	Scores        []csafScore        `json:"scores"`
-	ProductStatus *csafProductStatus `json:"product_status,omitempty"`
+	CVE           string              `json:"cve"`
+	Scores        []csafScore         `json:"scores"`
+	ProductStatus *csafProductStatus  `json:"product_status,omitempty"`
+	CWE           *csafCWE            `json:"cwe,omitempty"`
+	Notes         []csafNote          `json:"notes,omitempty"`
+	Remediations  []csafRemediation   `json:"remediations,omitempty"`
+}
+
+type csafCWE struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type csafRemediation struct {
+	Category string `json:"category"`
+	Details  string `json:"details"`
+	URL      string `json:"url,omitempty"`
 }
 
 type csafScore struct {
