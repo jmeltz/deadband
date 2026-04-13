@@ -166,9 +166,9 @@ func buildTestSZLResponse() []byte {
 func TestParseSZLResponse(t *testing.T) {
 	data := buildTestSZLResponse()
 
-	id, err := parseSZLResponse(data)
+	id, err := ParseSZLResponse(data)
 	if err != nil {
-		t.Fatalf("parseSZLResponse() error: %v", err)
+		t.Fatalf("ParseSZLResponse() error: %v", err)
 	}
 
 	if id.OrderNumber != "6ES7 214-1AG40-0XB0" {
@@ -186,7 +186,7 @@ func TestParseSZLResponse(t *testing.T) {
 }
 
 func TestParseSZLResponse_TooShort(t *testing.T) {
-	_, err := parseSZLResponse([]byte{0x03, 0x00, 0x00, 0x05, 0x02})
+	_, err := ParseSZLResponse([]byte{0x03, 0x00, 0x00, 0x05, 0x02})
 	if err == nil {
 		t.Error("expected error for truncated response")
 	}
@@ -220,13 +220,13 @@ func TestParseCOTPResponse_Reject(t *testing.T) {
 
 func TestParseTPKT_Invalid(t *testing.T) {
 	// Wrong version
-	_, err := parseTPKT([]byte{0x01, 0x00, 0x00, 0x04})
+	_, err := ParseTPKT([]byte{0x01, 0x00, 0x00, 0x04})
 	if err == nil {
 		t.Error("expected error for wrong TPKT version")
 	}
 
 	// Too short
-	_, err = parseTPKT([]byte{0x03, 0x00})
+	_, err = ParseTPKT([]byte{0x03, 0x00})
 	if err == nil {
 		t.Error("expected error for truncated TPKT")
 	}
@@ -240,7 +240,7 @@ func TestS7IdentityToDevice(t *testing.T) {
 		SerialNumber:    "S C-H5N44832201",
 	}
 
-	dev := s7IdentityToDevice("10.0.1.50", id)
+	dev := S7IdentityToDevice("10.0.1.50", id)
 
 	if dev.IP != "10.0.1.50" {
 		t.Errorf("IP = %q, want %q", dev.IP, "10.0.1.50")
@@ -262,7 +262,7 @@ func TestS7IdentityToDevice_FallbackToOrderNumber(t *testing.T) {
 		FirmwareVersion: "V4.5.2",
 	}
 
-	dev := s7IdentityToDevice("10.0.1.50", id)
+	dev := S7IdentityToDevice("10.0.1.50", id)
 	if dev.Model != "6ES7 214-1AG40-0XB0" {
 		t.Errorf("Model = %q, want OrderNumber fallback %q", dev.Model, "6ES7 214-1AG40-0XB0")
 	}

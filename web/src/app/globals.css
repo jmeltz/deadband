@@ -67,3 +67,156 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-db-muted);
 }
+
+/* Card effects */
+.card-hover {
+  transition: box-shadow 0.3s ease, border-color 0.3s ease, transform 0.3s ease;
+}
+.card-hover:hover {
+  box-shadow: 0 0 24px rgba(1, 96, 94, 0.15), 0 0 4px rgba(1, 96, 94, 0.1), inset 0 0 40px rgba(1, 96, 94, 0.04);
+  border-color: var(--color-db-teal-dim);
+}
+
+.card-accent {
+  position: relative;
+  overflow: hidden;
+}
+.card-accent::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-db-teal), var(--color-db-teal-light));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s ease;
+}
+.card-accent:hover::after {
+  transform: scaleX(1);
+}
+
+.card-shine {
+  position: relative;
+  overflow: hidden;
+}
+.card-shine::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.03) 45%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0.03) 55%, transparent 60%);
+  transform: translateX(-100%);
+  pointer-events: none;
+  z-index: 1;
+}
+.card-shine:hover::before {
+  animation: card-shine-sweep 0.6s ease-out forwards;
+}
+
+@keyframes card-shine-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Button effects */
+.btn-glow {
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.3s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+.btn-glow:hover {
+  box-shadow: 0 0 20px rgba(2, 128, 125, 0.3), 0 0 6px rgba(2, 128, 125, 0.2);
+  transform: scale(1.02);
+}
+.btn-glow:active {
+  transform: scale(0.98);
+}
+.btn-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: conic-gradient(from 0deg, var(--color-db-teal-dim), var(--color-db-teal-light), #3b82f6, var(--color-db-teal-dim));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+  animation: border-rotate 2s linear infinite;
+}
+.btn-glow:hover::before {
+  opacity: 0.6;
+}
+
+.btn-secondary-glow {
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.btn-secondary-glow:hover {
+  border-color: var(--color-db-teal-dim);
+  box-shadow: 0 0 12px rgba(1, 96, 94, 0.15);
+}
+
+@keyframes border-rotate {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+/* Code scanline */
+.code-scanline {
+  position: relative;
+  overflow: hidden;
+}
+.code-scanline::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(2,128,125,0.015) 2px, rgba(2,128,125,0.015) 4px);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* App utilities */
+.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+.table-row-hover:hover {
+  background-color: rgba(1, 96, 94, 0.04);
+}
+
+.nav-active-glow {
+  box-shadow: inset 3px 0 0 var(--color-db-teal), 0 0 12px rgba(1, 96, 94, 0.1);
+}
+
+.header-border-glow {
+  border-image: linear-gradient(90deg, transparent, var(--color-db-teal-dim), var(--color-db-teal), var(--color-db-teal-dim), transparent) 1;
+}
+
+.badge-glow-critical {
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+}
+
+.bar-fill {
+  transition: width 0.8s ease-out;
+}
+.bar-fill-glow {
+  box-shadow: 0 0 6px rgba(1, 96, 94, 0.3);
+}
+
+.input-industrial {
+  border-radius: 0;
+}
+.input-industrial:focus {
+  border-color: var(--color-db-teal);
+  box-shadow: 0 0 0 1px var(--color-db-teal), 0 0 8px rgba(1, 96, 94, 0.15);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .card-hover { transition: none; }
+  .card-accent::after { transition: none; }
+  .card-shine:hover::before { animation: none !important; }
+  .btn-glow { transition: none; }
+  .btn-glow:hover { transform: none; }
+  .btn-glow:active { transform: none; }
+  .btn-glow::before { animation: none !important; }
+  .btn-secondary-glow { transition: none; }
+  .bar-fill { transition: none; }
+  .table-row-hover { transition: none; }
+}

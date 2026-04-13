@@ -64,9 +64,9 @@ func buildControllerDataReadRequest(dstNode, srcNode byte) []byte {
 	return append(header, finsMRCControllerRead, finsSRCControllerRead)
 }
 
-// parseFINSResponse validates a FINS response frame and returns the end code and payload.
+// ParseFINSResponse validates a FINS response frame and returns the end code and payload.
 // Minimum frame: 10 (header) + 2 (command) + 2 (end code) = 14 bytes.
-func parseFINSResponse(data []byte, expectedMRC, expectedSRC byte) (uint16, []byte, error) {
+func ParseFINSResponse(data []byte, expectedMRC, expectedSRC byte) (uint16, []byte, error) {
 	if len(data) < 14 {
 		return 0, nil, fmt.Errorf("FINS response too short: %d bytes", len(data))
 	}
@@ -86,9 +86,9 @@ func parseFINSResponse(data []byte, expectedMRC, expectedSRC byte) (uint16, []by
 	return endCode, data[14:], nil
 }
 
-// parseControllerDataRead extracts model and version from a Controller Data Read payload.
+// ParseControllerDataRead extracts model and version from a Controller Data Read payload.
 // Layout: 20 bytes model (ASCII, padded) + 20 bytes version (ASCII, padded).
-func parseControllerDataRead(payload []byte) (*FINSIdentity, error) {
+func ParseControllerDataRead(payload []byte) (*FINSIdentity, error) {
 	if len(payload) < finsModelLen+finsVersionLen {
 		return nil, fmt.Errorf("controller data too short: %d bytes (need %d)", len(payload), finsModelLen+finsVersionLen)
 	}
@@ -140,7 +140,7 @@ func FINSIdentify(ip string, timeout time.Duration) (*FINSIdentity, error) {
 		return nil, nil // Timeout — host doesn't speak FINS
 	}
 
-	endCode, payload, err := parseFINSResponse(buf[:n], finsMRCControllerRead, finsSRCControllerRead)
+	endCode, payload, err := ParseFINSResponse(buf[:n], finsMRCControllerRead, finsSRCControllerRead)
 	if err != nil {
 		return nil, nil
 	}
@@ -149,10 +149,11 @@ func FINSIdentify(ip string, timeout time.Duration) (*FINSIdentity, error) {
 		return nil, nil
 	}
 
-	return parseControllerDataRead(payload)
+	return ParseControllerDataRead(payload)
 }
 
-func finsIdentityToDevice(ip string, id *FINSIdentity) inventory.Device {
+// FINSIdentityToDevice converts a FINSIdentity to an inventory.Device.
+func FINSIdentityToDevice(ip string, id *FINSIdentity) inventory.Device {
 	return inventory.Device{
 		IP:       ip,
 		Vendor:   "Omron",
@@ -186,7 +187,7 @@ func discoverFINS(ips []string, timeout time.Duration, concurrency int, progress
 				return
 			}
 
-			dev := finsIdentityToDevice(ip, id)
+			dev := FINSIdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()

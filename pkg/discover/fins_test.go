@@ -76,7 +76,7 @@ func TestParseFINSResponse(t *testing.T) {
 		copy(payload[20:40], "02.50               ")
 
 		data := buildTestFINSResponse(0x05, 0x01, 0x0000, payload)
-		endCode, result, err := parseFINSResponse(data, 0x05, 0x01)
+		endCode, result, err := ParseFINSResponse(data, 0x05, 0x01)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -90,7 +90,7 @@ func TestParseFINSResponse(t *testing.T) {
 
 	t.Run("non-zero end code", func(t *testing.T) {
 		data := buildTestFINSResponse(0x05, 0x01, 0x0401, nil)
-		endCode, _, err := parseFINSResponse(data, 0x05, 0x01)
+		endCode, _, err := ParseFINSResponse(data, 0x05, 0x01)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestParseFINSResponse(t *testing.T) {
 	})
 
 	t.Run("too short", func(t *testing.T) {
-		_, _, err := parseFINSResponse([]byte{0xC0, 0x00}, 0x05, 0x01)
+		_, _, err := ParseFINSResponse([]byte{0xC0, 0x00}, 0x05, 0x01)
 		if err == nil {
 			t.Fatal("expected error for short response")
 		}
@@ -109,7 +109,7 @@ func TestParseFINSResponse(t *testing.T) {
 	t.Run("not a response", func(t *testing.T) {
 		data := buildTestFINSResponse(0x05, 0x01, 0x0000, nil)
 		data[0] = 0x80 // Command ICF, not response
-		_, _, err := parseFINSResponse(data, 0x05, 0x01)
+		_, _, err := ParseFINSResponse(data, 0x05, 0x01)
 		if err == nil {
 			t.Fatal("expected error for command ICF")
 		}
@@ -117,7 +117,7 @@ func TestParseFINSResponse(t *testing.T) {
 
 	t.Run("wrong command code", func(t *testing.T) {
 		data := buildTestFINSResponse(0x06, 0x02, 0x0000, nil)
-		_, _, err := parseFINSResponse(data, 0x05, 0x01)
+		_, _, err := ParseFINSResponse(data, 0x05, 0x01)
 		if err == nil {
 			t.Fatal("expected error for wrong command code")
 		}
@@ -174,7 +174,7 @@ func TestParseControllerDataRead(t *testing.T) {
 			copy(payload[0:20], tt.model)
 			copy(payload[20:40], tt.version)
 
-			id, err := parseControllerDataRead(payload)
+			id, err := ParseControllerDataRead(payload)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -188,7 +188,7 @@ func TestParseControllerDataRead(t *testing.T) {
 	}
 
 	t.Run("short payload", func(t *testing.T) {
-		_, err := parseControllerDataRead(make([]byte, 20))
+		_, err := ParseControllerDataRead(make([]byte, 20))
 		if err == nil {
 			t.Fatal("expected error for short payload")
 		}
@@ -219,7 +219,7 @@ func TestLastOctetInvalid(t *testing.T) {
 }
 
 func TestFINSIdentityToDevice(t *testing.T) {
-	dev := finsIdentityToDevice("10.0.1.50", &FINSIdentity{
+	dev := FINSIdentityToDevice("10.0.1.50", &FINSIdentity{
 		Model:   "CP1L-EL20DT1-D",
 		Version: "02.50",
 	})
@@ -244,17 +244,17 @@ func TestFINSFullResponseParsing(t *testing.T) {
 
 	data := buildTestFINSResponse(0x05, 0x01, 0x0000, payload)
 
-	endCode, result, err := parseFINSResponse(data, 0x05, 0x01)
+	endCode, result, err := ParseFINSResponse(data, 0x05, 0x01)
 	if err != nil {
-		t.Fatalf("parseFINSResponse: %v", err)
+		t.Fatalf("ParseFINSResponse: %v", err)
 	}
 	if endCode != 0x0000 {
 		t.Fatalf("end code = 0x%04X, want 0x0000", endCode)
 	}
 
-	id, err := parseControllerDataRead(result)
+	id, err := ParseControllerDataRead(result)
 	if err != nil {
-		t.Fatalf("parseControllerDataRead: %v", err)
+		t.Fatalf("ParseControllerDataRead: %v", err)
 	}
 	if id.Model != "CP1L-EL20DT1-D" {
 		t.Errorf("model = %q, want %q", id.Model, "CP1L-EL20DT1-D")

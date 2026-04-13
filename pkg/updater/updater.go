@@ -226,9 +226,14 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		}
 	}
 
-	// Collect CVEs and max CVSS
+	// Collect CVEs, max CVSS, CWEs, and remediations from vulnerabilities
 	var cves []string
 	maxCVSS := 0.0
+	cweSeen := make(map[string]bool)
+	var weaknesses []advisory.Weakness
+	remSeen := make(map[string]bool)
+	var remediations []advisory.Remediation
+
 	for _, vuln := range doc.Vulnerabilities {
 		if vuln.CVE != "" {
 			cves = append(cves, vuln.CVE)
@@ -237,6 +242,44 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 			var cvss csafCVSS
 			if err := json.Unmarshal(score.CVSSv3, &cvss); err == nil {
 				maxCVSS = math.Max(maxCVSS, cvss.BaseScore)
+			}
+		}
+		// Extract CWE weakness types
+		if vuln.CWE != nil && vuln.CWE.ID != "" && !cweSeen[vuln.CWE.ID] {
+			cweSeen[vuln.CWE.ID] = true
+			weaknesses = append(weaknesses, advisory.Weakness{
+				ID:   vuln.CWE.ID,
+				Name: vuln.CWE.Name,
+			})
+		}
+		// Extract remediations
+		for _, rem := range vuln.Remediations {
+			key := rem.Category + ":" + rem.Details
+			if !remSeen[key] {
+				remSeen[key] = true
+				remediations = append(remediations, advisory.Remediation{
+					Category: rem.Category,
+					Details:  rem.Details,
+					URL:      rem.URL,
+				})
+			}
+		}
+	}
+
+	// Extract summary and sectors from document notes
+	var summary string
+	var sectors []string
+	for _, note := range doc.Document.Notes {
+		switch note.Category {
+		case "summary":
+			if summary == "" {
+				summary = note.Text
+			}
+		case "general":
+			// Parse "Critical Infrastructure Sectors:" from general notes
+			if strings.Contains(note.Text, "Critical Infrastructure Sectors:") ||
+				strings.Contains(note.Text, "CRITICAL INFRASTRUCTURE SECTORS") {
+				sectors = parseSectors(note.Text)
 			}
 		}
 	}
@@ -277,7 +320,46 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		CVEs:             cves,
 		URL:              url,
 		Published:        published,
+		Summary:          summary,
+		Weaknesses:       weaknesses,
+		Sectors:          sectors,
+		Remediations:     remediations,
 	}}
+}
+
+// parseSectors extracts sector names from CISA background notes text.
+// The text typically looks like:
+// "Critical Infrastructure Sectors: Energy, Water and Wastewater Systems"
+func parseSectors(text string) []string {
+	// Try to find the sectors value after the label
+	for _, prefix := range []string{
+		"Critical Infrastructure Sectors:",
+		"CRITICAL INFRASTRUCTURE SECTORS:",
+	} {
+		idx := strings.Index(text, prefix)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(text[idx+len(prefix):])
+		// Take until the next newline or bullet point
+		if nl := strings.IndexAny(rest, "\n\r"); nl >= 0 {
+			rest = rest[:nl]
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			continue
+		}
+		parts := strings.Split(rest, ",")
+		var sectors []string
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				sectors = append(sectors, p)
+			}
+		}
+		return sectors
+	}
+	return nil
 }
 
 // mergeAdvisories merges a batch of newly fetched advisories into the existing map,

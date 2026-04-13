@@ -97,7 +97,7 @@ func TestParseSLMPResponse_Success(t *testing.T) {
 	payload := []byte("test data")
 	frame := buildTestSLMPResponse(0x0000, payload)
 
-	endCode, data, err := parseSLMPResponse(frame)
+	endCode, data, err := ParseSLMPResponse(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestParseSLMPResponse_Success(t *testing.T) {
 func TestParseSLMPResponse_ErrorEndCode(t *testing.T) {
 	frame := buildTestSLMPResponse(0xC059, nil)
 
-	endCode, _, err := parseSLMPResponse(frame)
+	endCode, _, err := ParseSLMPResponse(frame)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestParseSLMPResponse_ErrorEndCode(t *testing.T) {
 }
 
 func TestParseSLMPResponse_TooShort(t *testing.T) {
-	_, _, err := parseSLMPResponse([]byte{0xD0, 0x00, 0x00})
+	_, _, err := ParseSLMPResponse([]byte{0xD0, 0x00, 0x00})
 	if err == nil {
 		t.Error("expected error for short frame")
 	}
@@ -131,7 +131,7 @@ func TestParseSLMPResponse_TooShort(t *testing.T) {
 func TestParseSLMPResponse_WrongSubheader(t *testing.T) {
 	frame := buildTestSLMPResponse(0x0000, nil)
 	frame[0] = 0x50 // request subheader, not response
-	_, _, err := parseSLMPResponse(frame)
+	_, _, err := ParseSLMPResponse(frame)
 	if err == nil {
 		t.Error("expected error for wrong subheader")
 	}
@@ -146,7 +146,7 @@ func TestParseReadTypeNameResponse_RSeries(t *testing.T) {
 	binary.LittleEndian.PutUint16(payload[16:18], 0x0042)
 
 	frame := buildTestSLMPResponse(0x0000, payload)
-	id, err := parseReadTypeNameResponse(frame)
+	id, err := ParseReadTypeNameResponse(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestParseReadTypeNameResponse_QSeries(t *testing.T) {
 	}
 
 	frame := buildTestSLMPResponse(0x0000, payload)
-	id, err := parseReadTypeNameResponse(frame)
+	id, err := ParseReadTypeNameResponse(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestParseReadTypeNameResponse_FX5(t *testing.T) {
 	}
 
 	frame := buildTestSLMPResponse(0x0000, payload)
-	id, err := parseReadTypeNameResponse(frame)
+	id, err := ParseReadTypeNameResponse(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestParseReadTypeNameResponse_NullPadded(t *testing.T) {
 	copy(payload, "L02CPU")
 
 	frame := buildTestSLMPResponse(0x0000, payload)
-	id, err := parseReadTypeNameResponse(frame)
+	id, err := ParseReadTypeNameResponse(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestParseReadTypeNameResponse_NullPadded(t *testing.T) {
 
 func TestParseReadTypeNameResponse_ErrorCode(t *testing.T) {
 	frame := buildTestSLMPResponse(0xC059, nil)
-	_, err := parseReadTypeNameResponse(frame)
+	_, err := ParseReadTypeNameResponse(frame)
 	if err == nil {
 		t.Error("expected error for non-zero end code")
 	}
@@ -219,7 +219,7 @@ func TestParseReadTypeNameResponse_ErrorCode(t *testing.T) {
 
 func TestParseReadTypeNameResponse_ShortPayload(t *testing.T) {
 	frame := buildTestSLMPResponse(0x0000, []byte("short"))
-	_, err := parseReadTypeNameResponse(frame)
+	_, err := ParseReadTypeNameResponse(frame)
 	if err == nil {
 		t.Error("expected error for short payload")
 	}
@@ -227,7 +227,7 @@ func TestParseReadTypeNameResponse_ShortPayload(t *testing.T) {
 
 func TestSLMPIdentityToDevice(t *testing.T) {
 	id := &SLMPIdentity{ModelName: "R04CPU", TypeCode: 0x0042}
-	dev := slmpIdentityToDevice("10.0.1.50", id)
+	dev := SLMPIdentityToDevice("10.0.1.50", id)
 
 	if dev.IP != "10.0.1.50" {
 		t.Errorf("IP = %q, want %q", dev.IP, "10.0.1.50")
