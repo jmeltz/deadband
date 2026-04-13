@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/compliance"
 	"github.com/jmeltz/deadband/pkg/diff"
 	"github.com/jmeltz/deadband/pkg/matcher"
 )
@@ -23,14 +24,31 @@ type ResultWriter interface {
 	Flush() error
 }
 
+// WriterOpts configures optional features for output writers.
+type WriterOpts struct {
+	Compliance []compliance.ControlMapping
+}
+
 func NewWriter(w io.Writer, format string) (ResultWriter, error) {
+	return NewWriterWithOpts(w, format, WriterOpts{})
+}
+
+func NewWriterWithOpts(w io.Writer, format string, opts WriterOpts) (ResultWriter, error) {
 	switch format {
 	case "text":
 		return &textWriter{w: w}, nil
 	case "csv":
 		return newCSVWriter(w), nil
 	case "json":
-		return newJSONWriter(w), nil
+		jw := newJSONWriter(w)
+		jw.compliance = opts.Compliance
+		return jw, nil
+	case "html":
+		hw := newHTMLWriter(w)
+		hw.compliance = opts.Compliance
+		return hw, nil
+	case "sarif":
+		return newSARIFWriter(w), nil
 	default:
 		return nil, fmt.Errorf("unsupported output format: %s", format)
 	}

@@ -7,15 +7,17 @@ import (
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/compliance"
 	"github.com/jmeltz/deadband/pkg/matcher"
 )
 
 type jsonOutput struct {
-	CheckedAt      string             `json:"checked_at"`
-	DBUpdated      string             `json:"db_updated"`
-	DevicesChecked int                `json:"devices_checked"`
-	Results        []jsonDeviceResult `json:"results"`
-	Summary        *jsonSummary       `json:"summary,omitempty"`
+	CheckedAt      string                       `json:"checked_at"`
+	DBUpdated      string                       `json:"db_updated"`
+	DevicesChecked int                          `json:"devices_checked"`
+	Results        []jsonDeviceResult           `json:"results"`
+	Summary        *jsonSummary                 `json:"summary,omitempty"`
+	Compliance     []compliance.ControlMapping  `json:"compliance,omitempty"`
 }
 
 type jsonDeviceResult struct {
@@ -28,11 +30,16 @@ type jsonDeviceResult struct {
 }
 
 type jsonAdvisory struct {
-	ID      string   `json:"id"`
-	CVEs    []string `json:"cves"`
-	CVSSv3  float64  `json:"cvss_v3"`
-	Title   string   `json:"title"`
-	URL     string   `json:"url"`
+	ID             string   `json:"id"`
+	CVEs           []string `json:"cves"`
+	CVSSv3         float64  `json:"cvss_v3"`
+	Title          string   `json:"title"`
+	URL            string   `json:"url"`
+	KEV            bool     `json:"kev"`
+	KEVRansomware  bool     `json:"kev_ransomware,omitempty"`
+	EPSSScore      float64  `json:"epss_score,omitempty"`
+	EPSSPercentile float64  `json:"epss_percentile,omitempty"`
+	RiskScore      float64  `json:"risk_score"`
 }
 
 type jsonSummary struct {
@@ -43,8 +50,9 @@ type jsonSummary struct {
 }
 
 type jsonWriter struct {
-	w      io.Writer
-	output jsonOutput
+	w          io.Writer
+	output     jsonOutput
+	compliance []compliance.ControlMapping
 }
 
 func newJSONWriter(w io.Writer) *jsonWriter {
@@ -79,11 +87,16 @@ func (jw *jsonWriter) WriteResult(r matcher.Result) error {
 
 	for _, m := range r.Matches {
 		dr.Advisories = append(dr.Advisories, jsonAdvisory{
-			ID:     m.Advisory.ID,
-			CVEs:   m.Advisory.CVEs,
-			CVSSv3: m.Advisory.CVSSv3Max,
-			Title:  strings.TrimSpace(m.Advisory.Title),
-			URL:    m.Advisory.URL,
+			ID:             m.Advisory.ID,
+			CVEs:           m.Advisory.CVEs,
+			CVSSv3:         m.Advisory.CVSSv3Max,
+			Title:          strings.TrimSpace(m.Advisory.Title),
+			URL:            m.Advisory.URL,
+			KEV:            m.KEV,
+			KEVRansomware:  m.KEVRansomware,
+			EPSSScore:      m.EPSSScore,
+			EPSSPercentile: m.EPSSPercentile,
+			RiskScore:      m.RiskScore,
 		})
 	}
 
@@ -102,6 +115,9 @@ func (jw *jsonWriter) WriteSummary(s Summary, _ int) error {
 }
 
 func (jw *jsonWriter) Flush() error {
+	if len(jw.compliance) > 0 {
+		jw.output.Compliance = jw.compliance
+	}
 	enc := json.NewEncoder(jw.w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(jw.output)
