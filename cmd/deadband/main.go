@@ -5,36 +5,48 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/baseline"
 	"github.com/jmeltz/deadband/pkg/cli"
+	"github.com/jmeltz/deadband/pkg/compliance"
 	"github.com/jmeltz/deadband/pkg/diff"
 	"github.com/jmeltz/deadband/pkg/discover"
+	"github.com/jmeltz/deadband/pkg/enrichment"
 	"github.com/jmeltz/deadband/pkg/inventory"
 	"github.com/jmeltz/deadband/pkg/matcher"
 	"github.com/jmeltz/deadband/pkg/output"
+	"github.com/jmeltz/deadband/pkg/pcap"
 	"github.com/jmeltz/deadband/pkg/server"
 	"github.com/jmeltz/deadband/pkg/updater"
 )
 
 func main() {
-	// Handle "serve" subcommand before flag.Parse()
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
-		addr := serveFlags.String("addr", ":8484", "Listen address (e.g. :8484)")
-		dbPath := serveFlags.String("db", advisory.DefaultDBPath(), "Path to advisory database")
-		serveFlags.Parse(os.Args[2:])
+	// Handle subcommands before flag.Parse()
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "serve":
+			serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
+			addr := serveFlags.String("addr", ":8484", "Listen address (e.g. :8484)")
+			dbPath := serveFlags.String("db", advisory.DefaultDBPath(), "Path to advisory database")
+			serveFlags.Parse(os.Args[2:])
 
-		srv, err := server.New(*addr, *dbPath)
-		if err != nil {
-			log.Fatalf("[deadband] Error: %v", err)
+			srv, err := server.New(*addr, *dbPath)
+			if err != nil {
+				log.Fatalf("[deadband] Error: %v", err)
+			}
+			if err := srv.ListenAndServe(); err != nil {
+				log.Fatalf("[deadband] Error: %v", err)
+			}
+			return
+		case "pcap":
+			runPCAP(os.Args[2:])
+			return
 		}
-		if err := srv.ListenAndServe(); err != nil {
-			log.Fatalf("[deadband] Error: %v", err)
-		}
-		return
 	}
 
 	var (
@@ -52,12 +64,18 @@ func main() {
 		stats         bool
 		since         string
 		source        string
-		cidr        string
-		scanMode    string
-		legacyHTTP  bool
-		scanTimeout time.Duration
-		httpTimeout time.Duration
-		concurrency int
+		cidr            string
+		scanMode        string
+		legacyHTTP      bool
+		scanTimeout     time.Duration
+		httpTimeout     time.Duration
+		concurrency     int
+		prioritize       bool
+		skipEnrichment   bool
+		complianceFlag   string
+		saveBaseline     bool
+		compareBaseline  bool
+		baselinePath     string
 	)
 
 	flag.StringVar(&inventoryPath, "inventory", "", "Path to device inventory file (CSV, JSON, or flat)")
@@ -67,7 +85,7 @@ func main() {
 	flag.StringVar(&dbPath, "db", advisory.DefaultDBPath(), "Path to advisory database cache")
 	flag.StringVar(&outputPath, "output", "-", "Output file path (- for stdout)")
 	flag.StringVar(&outputPath, "o", "-", "Output file path (alias for --output)")
-	flag.StringVar(&outFormat, "out-format", "text", "Output format: text, csv, json")
+	flag.StringVar(&outFormat, "out-format", "text", "Output format: text, csv, json, html, sarif")
 	flag.StringVar(&minConfidence, "min-confidence", "low", "Minimum confidence: low, medium, high")
 	flag.Float64Var(&minCVSS, "min-cvss", 0.0, "Minimum CVSS v3 score filter")
 	flag.StringVar(&vendorFilter, "vendor", "", "Filter to a specific vendor")
@@ -79,11 +97,23 @@ func main() {
 
 	// Discovery flags
 	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
-	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, melsec, bacnet, fins, srtp, http")
+	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, melsec, bacnet, fins, srtp, opcua, http")
 	flag.BoolVar(&legacyHTTP, "legacy-http", false, "Use HTTP scraping (alias for --mode http)")
 	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP/UDP scan timeout")
 	flag.DurationVar(&httpTimeout, "http-timeout", 5*time.Second, "HTTP scrape timeout")
 	flag.IntVar(&concurrency, "concurrency", 50, "Concurrent scan workers")
+
+	// Enrichment flags
+	flag.BoolVar(&prioritize, "prioritize", false, "Sort results by risk score (KEV > EPSS > CVSS)")
+	flag.BoolVar(&skipEnrichment, "skip-enrichment", false, "Skip KEV/EPSS fetch during update")
+
+	// Compliance flags
+	flag.StringVar(&complianceFlag, "compliance", "", "Include compliance mappings: iec62443, nist-csf, nerc-cip, all (comma-separated)")
+
+	// Baseline flags
+	flag.BoolVar(&saveBaseline, "save-baseline", false, "Save current device list as baseline after scan")
+	flag.BoolVar(&compareBaseline, "compare-baseline", false, "Compare current scan against saved baseline")
+	flag.StringVar(&baselinePath, "baseline", baseline.DefaultPath(), "Custom baseline file path")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deadband [flags]\n\n")
@@ -92,6 +122,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (CIP + S7 + Modbus) and check\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
+		fmt.Fprintf(os.Stderr, "  deadband pcap <file>          Extract devices from pcap capture (passive)\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -101,7 +132,7 @@ func main() {
 	flag.Parse()
 
 	if update {
-		runUpdate(dbPath, since, source)
+		runUpdate(dbPath, since, source, skipEnrichment)
 		return
 	}
 
@@ -109,6 +140,10 @@ func main() {
 		runStats(dbPath)
 		return
 	}
+
+	// Load enrichment data for check commands
+	enrichDir := enrichmentDir(dbPath)
+	edb := enrichment.LoadFromDir(enrichDir)
 
 	if cidr != "" {
 		if legacyHTTP {
@@ -118,7 +153,7 @@ func main() {
 		if dryRun || len(devices) == 0 {
 			return
 		}
-		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter)
+		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath)
 		return
 	}
 
@@ -133,7 +168,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun)
+	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath)
 }
 
 func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Duration, concurrency int, dryRun bool) []inventory.Device {
@@ -178,13 +213,68 @@ func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Dur
 	return devices
 }
 
-func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string) {
+func runPCAP(args []string) {
+	pcapFlags := flag.NewFlagSet("pcap", flag.ExitOnError)
+	dbPath := pcapFlags.String("db", advisory.DefaultDBPath(), "Path to advisory database")
+	outputPath := pcapFlags.String("o", "-", "Output file path")
+	outFormat := pcapFlags.String("out-format", "text", "Output format: text, csv, json, html, sarif")
+	minConfidence := pcapFlags.String("min-confidence", "low", "Minimum confidence: low, medium, high")
+	minCVSS := pcapFlags.Float64("min-cvss", 0.0, "Minimum CVSS v3 score filter")
+	vendorFilter := pcapFlags.String("vendor", "", "Filter to a specific vendor")
+	prioritize := pcapFlags.Bool("prioritize", false, "Sort results by risk score")
+	skipEnrichment := pcapFlags.Bool("skip-enrichment", false, "Skip enrichment data")
+	complianceFlag := pcapFlags.String("compliance", "", "Include compliance mappings")
+	pcapFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: deadband pcap <file.pcap> [flags]\n\n")
+		fmt.Fprintf(os.Stderr, "Passive device extraction from pcap capture file.\n\n")
+		pcapFlags.PrintDefaults()
+	}
+	pcapFlags.Parse(args)
+
+	if pcapFlags.NArg() == 0 {
+		fmt.Fprintf(os.Stderr, "Error: pcap file path required\n\n")
+		pcapFlags.Usage()
+		os.Exit(2)
+	}
+	pcapPath := pcapFlags.Arg(0)
+
+	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	fmt.Printf("[deadband] Analyzing pcap: %s\n", pcapPath)
+
+	result, err := pcap.Analyze(pcapPath, func(msg string) {
+		fmt.Printf("[deadband] %s\n", msg)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
+		os.Exit(2)
+	}
+
+	if len(result.Devices) == 0 {
+		fmt.Println("[deadband] No ICS devices found in pcap.")
+		return
+	}
+
+	// Load enrichment data
+	var edb *enrichment.DB
+	if !*skipEnrichment {
+		edb = enrichment.LoadFromDir(enrichmentDir(*dbPath))
+	}
+
+	// Run vulnerability check on extracted devices
+	runCheckDevices(result.Devices, *dbPath, *outputPath, *outFormat, *minConfidence, *minCVSS, *vendorFilter, edb, *prioritize, *complianceFlag, false, false, "")
+}
+
+func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string) {
 	db, err := advisory.LoadDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
 		os.Exit(2)
 	}
 	fmt.Printf("[deadband] %s\n", db.Stats())
+	if edb.Loaded() {
+		stats := edb.GetStats()
+		fmt.Printf("[deadband] Enrichment: %d KEV entries, %d EPSS scores\n", stats.KEVCount, stats.EPSSCount)
+	}
 	fmt.Printf("[deadband] Checking %d discovered devices against advisory database...\n", len(devices))
 
 	conf := matcher.ParseConfidence(minConfidence)
@@ -195,6 +285,11 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 	}
 
 	results := matcher.MatchAll(devices, db, opts)
+	enrichResults(results, edb)
+
+	if prioritize {
+		sortByRisk(results)
+	}
 
 	var w *os.File
 	if outputPath == "" || outputPath == "-" {
@@ -210,7 +305,13 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 
 	fmt.Println()
 
-	writer, err := output.NewWriter(w, outFormat)
+	writerOpts := output.WriterOpts{}
+	if complianceFlag != "" {
+		frameworks := strings.Split(complianceFlag, ",")
+		writerOpts.Compliance = compliance.ForFrameworks(frameworks)
+	}
+
+	writer, err := output.NewWriterWithOpts(w, outFormat, writerOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
 		os.Exit(2)
@@ -248,23 +349,26 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 		os.Exit(2)
 	}
 
+	runBaseline(devices, db, opts, basePath, saveBase, compareBase)
+
 	if summary.Vulnerable > 0 || summary.Potential > 0 {
 		os.Exit(1)
 	}
 	os.Exit(0)
 }
 
-func runUpdate(dbPath, since, source string) {
+func runUpdate(dbPath, since, source string, skipEnrichment bool) {
 	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
-	fmt.Println("[deadband] Updating advisory database...")
+	progress := func(msg string) {
+		fmt.Printf("[deadband] %s\n", msg)
+	}
 
+	fmt.Println("[deadband] Updating advisory database...")
 	opts := updater.UpdateOpts{
-		DBPath: dbPath,
-		Since:  since,
-		Source: source,
-		Progress: func(msg string) {
-			fmt.Printf("[deadband] %s\n", msg)
-		},
+		DBPath:   dbPath,
+		Since:    since,
+		Source:   source,
+		Progress: progress,
 	}
 
 	db, err := updater.Update(opts)
@@ -272,8 +376,31 @@ func runUpdate(dbPath, since, source string) {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
 		os.Exit(2)
 	}
-
 	fmt.Printf("[deadband] %s\n", db.Stats())
+
+	// Fetch KEV + EPSS enrichment data
+	if !skipEnrichment {
+		enrichDir := enrichmentDir(dbPath)
+		if source != "" {
+			// Air-gapped: load from source directory
+			edb := enrichment.LoadFromDir(source)
+			if edb.Loaded() {
+				if err := edb.SaveToDir(enrichDir); err != nil {
+					progress(fmt.Sprintf("Warning: failed to save enrichment data: %v", err))
+				} else {
+					stats := edb.GetStats()
+					progress(fmt.Sprintf("Enrichment (local): %d KEV entries, %d EPSS scores", stats.KEVCount, stats.EPSSCount))
+				}
+			}
+		} else {
+			edb, _ := enrichment.FetchAll(progress)
+			if edb.Loaded() {
+				if err := edb.SaveToDir(enrichDir); err != nil {
+					progress(fmt.Sprintf("Warning: failed to save enrichment data: %v", err))
+				}
+			}
+		}
+	}
 }
 
 func runStats(dbPath string) {
@@ -371,7 +498,7 @@ func runDiff(basePath, comparePath, inputFormat, dbPath, outputPath, outFormat, 
 	}
 }
 
-func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool) {
+func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string) {
 	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
 
 	db, err := advisory.LoadDatabase(dbPath)
@@ -380,6 +507,10 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 		os.Exit(2)
 	}
 	fmt.Printf("[deadband] %s\n", db.Stats())
+	if edb.Loaded() {
+		stats := edb.GetStats()
+		fmt.Printf("[deadband] Enrichment: %d KEV entries, %d EPSS scores\n", stats.KEVCount, stats.EPSSCount)
+	}
 
 	devices, err := inventory.ParseFile(inventoryPath, inputFormat)
 	if err != nil {
@@ -401,6 +532,11 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 	}
 
 	results := matcher.MatchAll(devices, db, opts)
+	enrichResults(results, edb)
+
+	if prioritize {
+		sortByRisk(results)
+	}
 
 	var w *os.File
 	if outputPath == "" || outputPath == "-" {
@@ -416,7 +552,13 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 
 	fmt.Println()
 
-	writer, err := output.NewWriter(w, outFormat)
+	writerOpts := output.WriterOpts{}
+	if complianceFlag != "" {
+		frameworks := strings.Split(complianceFlag, ",")
+		writerOpts.Compliance = compliance.ForFrameworks(frameworks)
+	}
+
+	writer, err := output.NewWriterWithOpts(w, outFormat, writerOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
 		os.Exit(2)
@@ -454,8 +596,97 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 		os.Exit(2)
 	}
 
+	runBaseline(devices, db, opts, basePath, saveBase, compareBase)
+
 	if summary.Vulnerable > 0 || summary.Potential > 0 {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// runBaseline handles --compare-baseline and --save-baseline after a check completes.
+func runBaseline(devices []inventory.Device, db *advisory.Database, opts matcher.FilterOpts, basePath string, save, compare bool) {
+	if !save && !compare {
+		return
+	}
+
+	if compare {
+		report, err := baseline.Compare(basePath, devices, db, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[deadband] Baseline compare: %v\n", err)
+		} else {
+			changes := len(report.NewDevices) + len(report.RemovedDevices) + len(report.FirmwareChanges) + len(report.NewVulnerabilities)
+			if changes == 0 {
+				fmt.Println("[deadband] Baseline: no drift detected")
+			} else {
+				fmt.Printf("[deadband] Baseline drift: %d new, %d removed, %d firmware changes, %d new vulnerabilities\n",
+					len(report.NewDevices), len(report.RemovedDevices),
+					len(report.FirmwareChanges), len(report.NewVulnerabilities))
+				for _, d := range report.NewDevices {
+					fmt.Printf("  + %s %s (fw %s)\n", d.IP, d.Model, d.Firmware)
+				}
+				for _, d := range report.RemovedDevices {
+					fmt.Printf("  - %s %s (fw %s)\n", d.IP, d.Model, d.Firmware)
+				}
+				for _, fc := range report.FirmwareChanges {
+					fmt.Printf("  ~ %s %s: %s -> %s\n", fc.Device.IP, fc.Device.Model, fc.OldFirmware, fc.NewFirmware)
+				}
+				for _, nv := range report.NewVulnerabilities {
+					for _, m := range nv.NewMatches {
+						fmt.Printf("  ! %s %s: new advisory %s (CVSS %.1f)\n", nv.Device.IP, nv.Device.Model, m.Advisory.ID, m.Advisory.CVSSv3Max)
+					}
+				}
+			}
+		}
+	}
+
+	if save {
+		b := baseline.NewFromDevices(devices)
+		if err := baseline.Save(basePath, b); err != nil {
+			fmt.Fprintf(os.Stderr, "[deadband] Error saving baseline: %v\n", err)
+		} else {
+			fmt.Printf("[deadband] Baseline saved: %d devices -> %s\n", len(devices), basePath)
+		}
+	}
+}
+
+// enrichmentDir returns the directory where enrichment data (KEV/EPSS) is cached,
+// colocated with the advisory database.
+func enrichmentDir(dbPath string) string {
+	return filepath.Dir(dbPath)
+}
+
+// enrichResults populates KEV/EPSS/RiskScore fields on each Match from the enrichment DB.
+func enrichResults(results []matcher.Result, edb *enrichment.DB) {
+	if edb == nil || !edb.Loaded() {
+		return
+	}
+	for i := range results {
+		for j := range results[i].Matches {
+			m := &results[i].Matches[j]
+			ae := edb.EnrichAdvisory(m.Advisory.CVEs, m.Advisory.CVSSv3Max)
+			m.KEV = ae.KEV
+			m.KEVRansomware = ae.KEVRansomware
+			m.EPSSScore = ae.MaxEPSS
+			m.EPSSPercentile = ae.MaxEPSSPercent
+			m.RiskScore = ae.RiskScore
+		}
+	}
+}
+
+// sortByRisk reorders results by highest risk score (across all matched advisories).
+func sortByRisk(results []matcher.Result) {
+	sort.Slice(results, func(i, j int) bool {
+		return maxRiskScore(results[i]) > maxRiskScore(results[j])
+	})
+}
+
+func maxRiskScore(r matcher.Result) float64 {
+	maxScore := 0.0
+	for _, m := range r.Matches {
+		if m.RiskScore > maxScore {
+			maxScore = m.RiskScore
+		}
+	}
+	return maxScore
 }
