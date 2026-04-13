@@ -38,9 +38,14 @@ func confidenceRank(c Confidence) int {
 }
 
 type Match struct {
-	Advisory   advisory.Advisory
-	Confidence Confidence
-	Note       string
+	Advisory       advisory.Advisory
+	Confidence     Confidence
+	Note           string
+	KEV            bool
+	KEVRansomware  bool
+	EPSSScore      float64
+	EPSSPercentile float64
+	RiskScore      float64
 }
 
 type Result struct {
