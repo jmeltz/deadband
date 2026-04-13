@@ -125,8 +125,8 @@ func buildSZLReadRequest(szlID, szlIndex uint16) []byte {
 
 // --- Parsers ---
 
-// parseTPKT validates and strips the TPKT header, returning the payload.
-func parseTPKT(data []byte) ([]byte, error) {
+// ParseTPKT validates and strips the TPKT header, returning the payload.
+func ParseTPKT(data []byte) ([]byte, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("TPKT too short: %d bytes", len(data))
 	}
@@ -142,7 +142,7 @@ func parseTPKT(data []byte) ([]byte, error) {
 
 // parseCOTPResponse validates a COTP response and returns the PDU type.
 func parseCOTPResponse(data []byte) (byte, []byte, error) {
-	payload, err := parseTPKT(data)
+	payload, err := ParseTPKT(data)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -178,8 +178,8 @@ func parseS7SetupResponse(data []byte) error {
 	return nil
 }
 
-// parseSZLResponse parses an SZL 0x001C response into an S7Identity.
-func parseSZLResponse(data []byte) (*S7Identity, error) {
+// ParseSZLResponse parses an SZL 0x001C response into an S7Identity.
+func ParseSZLResponse(data []byte) (*S7Identity, error) {
 	pduType, s7Data, err := parseCOTPResponse(data)
 	if err != nil {
 		return nil, err
@@ -346,11 +346,11 @@ func s7Handshake(addr string, rack, slot int, timeout time.Duration) (*S7Identit
 	if err != nil {
 		return nil, err
 	}
-	return parseSZLResponse(buf[:n])
+	return ParseSZLResponse(buf[:n])
 }
 
-// s7IdentityToDevice converts an S7Identity to an inventory.Device.
-func s7IdentityToDevice(ip string, id *S7Identity) inventory.Device {
+// S7IdentityToDevice converts an S7Identity to an inventory.Device.
+func S7IdentityToDevice(ip string, id *S7Identity) inventory.Device {
 	model := id.ModuleName
 	if model == "" {
 		model = id.OrderNumber
@@ -407,7 +407,7 @@ func discoverS7(ips []string, timeout time.Duration, concurrency int, progress f
 				return
 			}
 
-			dev := s7IdentityToDevice(ip, id)
+			dev := S7IdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()

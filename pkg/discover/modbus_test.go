@@ -70,9 +70,9 @@ func TestParseMBAPHeader(t *testing.T) {
 	pdu := []byte{0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x07, byte(len("TestVendor")), 'T', 'e', 's', 't', 'V', 'e', 'n', 'd', 'o', 'r'}
 	frame := buildModbusMBAP(0x0042, 0x01, pdu)
 
-	txnID, unitID, parsedPDU, err := parseMBAPHeader(frame)
+	txnID, unitID, parsedPDU, err := ParseMBAPHeader(frame)
 	if err != nil {
-		t.Fatalf("parseMBAPHeader error: %v", err)
+		t.Fatalf("ParseMBAPHeader error: %v", err)
 	}
 	if txnID != 0x0042 {
 		t.Errorf("transaction ID = 0x%04X, want 0x0042", txnID)
@@ -86,7 +86,7 @@ func TestParseMBAPHeader(t *testing.T) {
 }
 
 func TestParseMBAPHeader_TooShort(t *testing.T) {
-	_, _, _, err := parseMBAPHeader([]byte{0x00, 0x01})
+	_, _, _, err := ParseMBAPHeader([]byte{0x00, 0x01})
 	if err == nil {
 		t.Error("expected error for short data")
 	}
@@ -96,7 +96,7 @@ func TestParseMBAPHeader_WrongProtocol(t *testing.T) {
 	data := make([]byte, 11)
 	binary.BigEndian.PutUint16(data[2:4], 0x0001) // wrong protocol
 	binary.BigEndian.PutUint16(data[4:6], 5)
-	_, _, _, err := parseMBAPHeader(data)
+	_, _, _, err := ParseMBAPHeader(data)
 	if err == nil {
 		t.Error("expected error for wrong protocol ID")
 	}
@@ -139,14 +139,14 @@ func TestParseReadDeviceIDResponse_Basic(t *testing.T) {
 		objMajorMinorRevision: "5.0.4.12",
 	}
 	frame := buildTestDeviceIDResponse(1, objects, false, 0)
-	_, _, pdu, err := parseMBAPHeader(frame)
+	_, _, pdu, err := ParseMBAPHeader(frame)
 	if err != nil {
 		t.Fatalf("MBAP parse error: %v", err)
 	}
 
-	parsed, more, _, err := parseReadDeviceIDResponse(pdu)
+	parsed, more, _, err := ParseReadDeviceIDResponse(pdu)
 	if err != nil {
-		t.Fatalf("parseReadDeviceIDResponse error: %v", err)
+		t.Fatalf("ParseReadDeviceIDResponse error: %v", err)
 	}
 	if more {
 		t.Error("expected moreFollows = false")
@@ -171,9 +171,9 @@ func TestParseReadDeviceIDResponse_Regular(t *testing.T) {
 		objModelName:          "PM573-ETH",
 	}
 	frame := buildTestDeviceIDResponse(1, objects, false, 0)
-	_, _, pdu, _ := parseMBAPHeader(frame)
+	_, _, pdu, _ := ParseMBAPHeader(frame)
 
-	parsed, _, _, err := parseReadDeviceIDResponse(pdu)
+	parsed, _, _, err := ParseReadDeviceIDResponse(pdu)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -191,9 +191,9 @@ func TestParseReadDeviceIDResponse_MoreFollows(t *testing.T) {
 		objProductCode: "M340",
 	}
 	frame := buildTestDeviceIDResponse(1, objects, true, 0x02)
-	_, _, pdu, _ := parseMBAPHeader(frame)
+	_, _, pdu, _ := ParseMBAPHeader(frame)
 
-	_, more, nextObj, err := parseReadDeviceIDResponse(pdu)
+	_, more, nextObj, err := ParseReadDeviceIDResponse(pdu)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestParseReadDeviceIDResponse_MoreFollows(t *testing.T) {
 
 func TestParseReadDeviceIDResponse_Exception(t *testing.T) {
 	pdu := []byte{mbFuncMEIError, 0x01} // Illegal Function exception
-	_, _, _, err := parseReadDeviceIDResponse(pdu)
+	_, _, _, err := ParseReadDeviceIDResponse(pdu)
 	if err == nil {
 		t.Error("expected error for exception response")
 	}
@@ -215,7 +215,7 @@ func TestParseReadDeviceIDResponse_Exception(t *testing.T) {
 
 func TestParseReadDeviceIDResponse_WrongFuncCode(t *testing.T) {
 	pdu := []byte{0x03, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x00}
-	_, _, _, err := parseReadDeviceIDResponse(pdu)
+	_, _, _, err := ParseReadDeviceIDResponse(pdu)
 	if err == nil {
 		t.Error("expected error for wrong function code")
 	}
@@ -223,7 +223,7 @@ func TestParseReadDeviceIDResponse_WrongFuncCode(t *testing.T) {
 
 func TestParseReadDeviceIDResponse_TooShort(t *testing.T) {
 	pdu := []byte{mbFuncMEI, meiReadDeviceID, 0x01}
-	_, _, _, err := parseReadDeviceIDResponse(pdu)
+	_, _, _, err := ParseReadDeviceIDResponse(pdu)
 	if err == nil {
 		t.Error("expected error for truncated response")
 	}
@@ -276,7 +276,7 @@ func TestModbusIdentityToDevice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dev := modbusIdentityToDevice("10.0.1.5", &tt.id)
+			dev := ModbusIdentityToDevice("10.0.1.5", &tt.id)
 			if dev.Vendor != tt.wantVend {
 				t.Errorf("vendor = %q, want %q", dev.Vendor, tt.wantVend)
 			}

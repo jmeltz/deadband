@@ -86,7 +86,7 @@ func TestBuildReadPropertyRequest(t *testing.T) {
 
 func TestParseBVLC(t *testing.T) {
 	frame := buildBVLC(bvlcOrigUnicast, []byte{0x01, 0x02, 0x03})
-	fn, payload, err := parseBVLC(frame)
+	fn, payload, err := ParseBVLC(frame)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -99,14 +99,14 @@ func TestParseBVLC(t *testing.T) {
 }
 
 func TestParseBVLC_TooShort(t *testing.T) {
-	_, _, err := parseBVLC([]byte{0x81})
+	_, _, err := ParseBVLC([]byte{0x81})
 	if err == nil {
 		t.Error("expected error for short frame")
 	}
 }
 
 func TestParseBVLC_WrongType(t *testing.T) {
-	_, _, err := parseBVLC([]byte{0x82, 0x0A, 0x00, 0x04})
+	_, _, err := ParseBVLC([]byte{0x82, 0x0A, 0x00, 0x04})
 	if err == nil {
 		t.Error("expected error for wrong BVLC type")
 	}
@@ -143,7 +143,7 @@ func buildTestIAmAPDU(deviceInstance uint32, maxAPDU uint16, segmentation byte, 
 
 func TestParseIAmResponse_Trane(t *testing.T) {
 	apdu := buildTestIAmAPDU(100, 1476, 0x03, 66) // Trane vendor ID = 66
-	instance, vendorID, err := parseIAmResponse(apdu)
+	instance, vendorID, err := ParseIAmResponse(apdu)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestParseIAmResponse_Trane(t *testing.T) {
 
 func TestParseIAmResponse_Honeywell(t *testing.T) {
 	apdu := buildTestIAmAPDU(5000, 480, 0x00, 15) // Honeywell vendor ID = 15
-	instance, vendorID, err := parseIAmResponse(apdu)
+	instance, vendorID, err := ParseIAmResponse(apdu)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestParseIAmResponse_SmallVendorID(t *testing.T) {
 	apdu = append(apdu, (tagEnumerated<<4)|1, 0x00)       // Segmentation
 	apdu = append(apdu, (tagUnsigned<<4)|1, 0x05)          // Vendor ID = 5 (Johnson Controls)
 
-	instance, vendorID, err := parseIAmResponse(apdu)
+	instance, vendorID, err := ParseIAmResponse(apdu)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -194,14 +194,14 @@ func TestParseIAmResponse_SmallVendorID(t *testing.T) {
 
 func TestParseIAmResponse_NotIAm(t *testing.T) {
 	apdu := []byte{apduUnconfirmedReq, svcWhoIs}
-	_, _, err := parseIAmResponse(apdu)
+	_, _, err := ParseIAmResponse(apdu)
 	if err == nil {
 		t.Error("expected error for non-I-Am response")
 	}
 }
 
 func TestParseIAmResponse_TooShort(t *testing.T) {
-	_, _, err := parseIAmResponse([]byte{apduUnconfirmedReq})
+	_, _, err := ParseIAmResponse([]byte{apduUnconfirmedReq})
 	if err == nil {
 		t.Error("expected error for short APDU")
 	}
@@ -307,9 +307,9 @@ func TestBACnetVendorName(t *testing.T) {
 		{9999, "BACnet Vendor 9999"},
 	}
 	for _, tt := range tests {
-		got := bacnetVendorName(tt.id)
+		got := BACnetVendorName(tt.id)
 		if got != tt.want {
-			t.Errorf("bacnetVendorName(%d) = %q, want %q", tt.id, got, tt.want)
+			t.Errorf("BACnetVendorName(%d) = %q, want %q", tt.id, got, tt.want)
 		}
 	}
 }
@@ -322,7 +322,7 @@ func TestBACnetIdentityToDevice(t *testing.T) {
 		FirmwareRevision: "6.2.2200",
 		DeviceInstance:   100,
 	}
-	dev := bacnetIdentityToDevice("10.0.1.50", id)
+	dev := BACnetIdentityToDevice("10.0.1.50", id)
 
 	if dev.IP != "10.0.1.50" {
 		t.Errorf("IP = %q, want %q", dev.IP, "10.0.1.50")
