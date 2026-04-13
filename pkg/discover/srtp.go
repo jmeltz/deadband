@@ -107,9 +107,9 @@ func parseSRTPInitResponse(data []byte) error {
 	return nil
 }
 
-// parseSRTPServiceResponse validates a service request response and returns
+// ParseSRTPServiceResponse validates a service request response and returns
 // the inline data (bytes 44-49 of a SHORT_ACK) plus any extended payload.
-func parseSRTPServiceResponse(data []byte) ([]byte, error) {
+func ParseSRTPServiceResponse(data []byte) ([]byte, error) {
 	if len(data) < srtpFrameSize {
 		return nil, fmt.Errorf("SRTP response too short: %d bytes", len(data))
 	}
@@ -132,14 +132,14 @@ func parseSRTPServiceResponse(data []byte) ([]byte, error) {
 	return inline, nil
 }
 
-// parseControllerTypeData extracts a controller identity from the response payload.
-func parseControllerTypeData(payload []byte) *SRTPIdentity {
+// ParseControllerTypeData extracts a controller identity from the response payload.
+func ParseControllerTypeData(payload []byte) *SRTPIdentity {
 	if len(payload) < 2 {
 		return &SRTPIdentity{Model: "PLC"}
 	}
 
 	typeCode := binary.LittleEndian.Uint16(payload[0:2])
-	model := srtpControllerName(typeCode)
+	model := SRTPControllerName(typeCode)
 
 	return &SRTPIdentity{TypeCode: typeCode, Model: model}
 }
@@ -157,7 +157,7 @@ func parseProgramNameData(payload []byte) string {
 	return string(clean)
 }
 
-func srtpControllerName(typeCode uint16) string {
+func SRTPControllerName(typeCode uint16) string {
 	if name, ok := srtpControllerTypes[typeCode]; ok {
 		return name
 	}
@@ -206,17 +206,18 @@ func SRTPIdentify(ip string, timeout time.Duration) (*SRTPIdentity, error) {
 		return nil, nil
 	}
 
-	payload, err := parseSRTPServiceResponse(buf[:n])
+	payload, err := ParseSRTPServiceResponse(buf[:n])
 	if err != nil {
 		// Controller Type failed — device speaks SRTP but rejected the request.
 		// Still report it as a GE/Emerson PLC.
 		return &SRTPIdentity{Model: "PLC"}, nil
 	}
 
-	return parseControllerTypeData(payload), nil
+	return ParseControllerTypeData(payload), nil
 }
 
-func srtpIdentityToDevice(ip string, id *SRTPIdentity) inventory.Device {
+// SRTPIdentityToDevice converts an SRTPIdentity to an inventory.Device.
+func SRTPIdentityToDevice(ip string, id *SRTPIdentity) inventory.Device {
 	return inventory.Device{
 		IP:     ip,
 		Vendor: "Emerson / GE",
@@ -259,7 +260,7 @@ func discoverSRTP(ips []string, timeout time.Duration, concurrency int, progress
 				return
 			}
 
-			dev := srtpIdentityToDevice(ip, id)
+			dev := SRTPIdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()

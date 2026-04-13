@@ -72,8 +72,8 @@ func buildReadDeviceIDRequest(transactionID uint16, unitID byte, readCode byte, 
 
 // --- Parsers ---
 
-// parseMBAPHeader validates and parses the 7-byte MBAP header.
-func parseMBAPHeader(data []byte) (transactionID uint16, unitID byte, pdu []byte, err error) {
+// ParseMBAPHeader validates and parses the 7-byte MBAP header.
+func ParseMBAPHeader(data []byte) (transactionID uint16, unitID byte, pdu []byte, err error) {
 	if len(data) < 7 {
 		return 0, 0, nil, fmt.Errorf("MBAP too short: %d bytes", len(data))
 	}
@@ -91,9 +91,9 @@ func parseMBAPHeader(data []byte) (transactionID uint16, unitID byte, pdu []byte
 	return transactionID, unitID, pdu, nil
 }
 
-// parseReadDeviceIDResponse parses a Read Device Identification response PDU.
+// ParseReadDeviceIDResponse parses a Read Device Identification response PDU.
 // Returns parsed object map, whether more objects follow, and the next object ID.
-func parseReadDeviceIDResponse(pdu []byte) (objects map[byte]string, moreFollows bool, nextObjID byte, err error) {
+func ParseReadDeviceIDResponse(pdu []byte) (objects map[byte]string, moreFollows bool, nextObjID byte, err error) {
 	if len(pdu) < 1 {
 		return nil, false, 0, fmt.Errorf("empty PDU")
 	}
@@ -199,12 +199,12 @@ func modbusReadDeviceID(conn net.Conn, readCode byte, startObjID byte) (*ModbusI
 			return nil, err
 		}
 
-		_, _, pdu, err := parseMBAPHeader(buf[:n])
+		_, _, pdu, err := ParseMBAPHeader(buf[:n])
 		if err != nil {
 			return nil, err
 		}
 
-		objects, moreFollows, nextObjID, err := parseReadDeviceIDResponse(pdu)
+		objects, moreFollows, nextObjID, err := ParseReadDeviceIDResponse(pdu)
 		if err != nil {
 			return nil, err
 		}
@@ -238,8 +238,8 @@ func modbusReadDeviceID(conn net.Conn, readCode byte, startObjID byte) (*ModbusI
 	}, nil
 }
 
-// modbusIdentityToDevice converts a ModbusIdentity to an inventory.Device.
-func modbusIdentityToDevice(ip string, id *ModbusIdentity) inventory.Device {
+// ModbusIdentityToDevice converts a ModbusIdentity to an inventory.Device.
+func ModbusIdentityToDevice(ip string, id *ModbusIdentity) inventory.Device {
 	vendor := normalizeModbusVendor(id.VendorName)
 
 	// Use the most specific model name available
@@ -340,7 +340,7 @@ func discoverModbusTCP(ips []string, timeout time.Duration, concurrency int, pro
 				return
 			}
 
-			dev := modbusIdentityToDevice(ip, id)
+			dev := ModbusIdentityToDevice(ip, id)
 			mu.Lock()
 			devices = append(devices, dev)
 			mu.Unlock()
