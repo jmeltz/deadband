@@ -41,7 +41,7 @@ export function FileUpload({
   return (
     <div
       className={cn(
-        "border-2 border-dashed rounded-lg px-6 py-8 text-center transition-colors cursor-pointer",
+        "border-2 border-dashed rounded-sm px-6 py-8 text-center transition-colors cursor-pointer",
         dragging
           ? "border-db-teal bg-db-teal-dim/30"
           : "border-db-border hover:border-db-muted bg-db-surface/50",
