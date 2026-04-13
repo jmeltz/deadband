@@ -145,7 +145,7 @@ export default function DiffPage() {
               </h3>
               <div className="space-y-3">
                 {result.new_vulnerabilities.map((nv, i) => (
-                  <div key={i} className="bg-db-bg rounded-md p-3">
+                  <div key={i} className="bg-db-bg rounded-sm p-3">
                     <div className="flex items-center gap-3 text-xs mb-2">
                       <span className="font-mono text-db-text">{nv.ip}</span>
                       <span className="font-mono text-db-text">{nv.model}</span>

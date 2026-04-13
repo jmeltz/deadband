@@ -2,6 +2,7 @@
 
 import { useDbStats } from "@/lib/hooks/useDbStats";
 import { useAdvisories } from "@/lib/hooks/useAdvisories";
+import { useEnrichmentStats } from "@/lib/hooks/useEnrichment";
 import { useQueryClient } from "@tanstack/react-query";
 import { StatCard, Card } from "@/components/ui/Card";
 import { CvssBadge } from "@/components/advisory/CvssBadge";
@@ -16,6 +17,7 @@ export default function Dashboard() {
     per_page: 10,
     sort: "published",
   });
+  const { data: enrichment } = useEnrichmentStats();
   const qc = useQueryClient();
   const checkResults = qc.getQueryData<CheckResponse>(["check-results"]);
 
@@ -36,7 +38,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-6 max-w-6xl">
       {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <StatCard
           label="Advisories"
           value={stats?.advisory_count ?? "—"}
@@ -56,26 +58,43 @@ export default function Dashboard() {
           }
           sub="new advisories"
         />
+      </div>
+      <div className="grid grid-cols-3 gap-4">
         <StatCard
           label="Chronic (>6mo)"
           value={stats?.chronic_count ?? "—"}
           sub="long-standing advisories"
+        />
+        <StatCard
+          label="KEV Entries"
+          value={enrichment?.kev_count ?? "—"}
+          sub={enrichment?.kev_date ? `Released ${enrichment.kev_date}` : "CISA Known Exploited"}
+        />
+        <StatCard
+          label="EPSS Scores"
+          value={enrichment?.epss_count ?? "—"}
+          sub={enrichment?.epss_version ? `Model ${enrichment.epss_version}` : "Exploit Prediction"}
         />
       </div>
 
       {/* Check summary if available */}
       {checkResults && (
         <Card>
-          <h3 className="font-heading text-sm font-semibold mb-3">
-            Last Check Results
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-heading text-sm font-semibold">
+              Last Check Results
+            </h3>
+            <Link href="/devices" className="text-xs text-db-teal-light hover:text-db-text transition-colors">
+              View details
+            </Link>
+          </div>
           <div className="flex gap-4">
             <SummaryBlock label="Vulnerable" value={checkResults.summary.vulnerable} color="bg-status-critical" />
             <SummaryBlock label="Potential" value={checkResults.summary.potential} color="bg-status-medium" />
             <SummaryBlock label="OK" value={checkResults.summary.ok} color="bg-status-ok" />
             <SummaryBlock label="No Match" value={checkResults.summary.no_match} color="bg-db-border" />
           </div>
-          <div className="mt-3 flex h-2 rounded-full overflow-hidden bg-db-bg">
+          <div className="mt-3 flex h-2 rounded-sm overflow-hidden bg-db-bg">
             <BarSegment count={checkResults.summary.vulnerable} total={checkResults.devices_checked} color="bg-status-critical" />
             <BarSegment count={checkResults.summary.potential} total={checkResults.devices_checked} color="bg-status-medium" />
             <BarSegment count={checkResults.summary.ok} total={checkResults.devices_checked} color="bg-status-ok" />
@@ -98,7 +117,7 @@ export default function Dashboard() {
               <Link
                 key={a.id}
                 href={`/advisories/detail?id=${a.id}`}
-                className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-db-bg transition-colors"
+                className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded table-row-hover transition-colors"
               >
                 <CvssBadge score={a.cvss_v3_max} />
                 <span className="text-xs font-mono text-db-muted w-32 shrink-0">{a.id}</span>
@@ -124,9 +143,9 @@ export default function Dashboard() {
                   <span className="text-xs text-db-text">{vendor}</span>
                   <span className="text-[10px] font-mono text-db-muted">{count}</span>
                 </div>
-                <div className="h-1.5 bg-db-bg rounded-full overflow-hidden">
+                <div className="h-1.5 bg-db-bg rounded-sm overflow-hidden">
                   <div
-                    className="h-full bg-db-teal rounded-full"
+                    className="h-full bg-db-teal rounded-sm bar-fill bar-fill-glow"
                     style={{ width: `${(count / maxVendorCount) * 100}%` }}
                   />
                 </div>
