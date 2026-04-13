@@ -35,6 +35,24 @@ func (tw *textWriter) WriteResult(r matcher.Result) error {
 		}
 		fmt.Fprintf(tw.w, "    %-16s %-16s CVSS %.1f  %s\n",
 			m.Advisory.ID, cves, m.Advisory.CVSSv3Max, note)
+		// Enrichment line (KEV, EPSS, Risk Score)
+		if m.KEV || m.EPSSScore > 0 || m.RiskScore > 0 {
+			fmt.Fprintf(tw.w, "    ")
+			if m.KEV {
+				if m.KEVRansomware {
+					fmt.Fprintf(tw.w, "[KEV+Ransomware] ")
+				} else {
+					fmt.Fprintf(tw.w, "[KEV] ")
+				}
+			}
+			if m.EPSSScore > 0 {
+				fmt.Fprintf(tw.w, "EPSS %.0f%% (%dth pctl)  ", m.EPSSScore*100, int(m.EPSSPercentile*100))
+			}
+			if m.RiskScore > 0 {
+				fmt.Fprintf(tw.w, "Risk: %.0f", m.RiskScore)
+			}
+			fmt.Fprintln(tw.w)
+		}
 		if m.Advisory.URL != "" {
 			fmt.Fprintf(tw.w, "    %s\n", m.Advisory.URL)
 		}
