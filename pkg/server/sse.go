@@ -10,7 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"path/filepath"
+
 	"github.com/jmeltz/deadband/pkg/discover"
+	"github.com/jmeltz/deadband/pkg/enrichment"
 	"github.com/jmeltz/deadband/pkg/inventory"
 	"github.com/jmeltz/deadband/pkg/updater"
 )
@@ -158,6 +161,9 @@ func (s *Server) startBackgroundUpdate() {
 			return
 		}
 
+		// Fetch enrichment data
+		fetchEnrichment(s.dbPath, opts.Progress)
+
 		if err := s.reloadDB(); err != nil {
 			log.Printf("[deadband] Reload error: %v", err)
 			return
@@ -166,6 +172,17 @@ func (s *Server) startBackgroundUpdate() {
 		log.Printf("[deadband] Auto-update complete. %s", s.db.Stats())
 		job.addProgress(fmt.Sprintf("Update complete. %s", s.db.Stats()))
 	}()
+}
+
+// fetchEnrichment downloads KEV + EPSS and saves to the enrichment cache directory.
+func fetchEnrichment(dbPath string, progress func(string)) {
+	enrichDir := filepath.Dir(dbPath)
+	edb, _ := enrichment.FetchAll(progress)
+	if edb != nil && edb.Loaded() {
+		if err := edb.SaveToDir(enrichDir); err != nil && progress != nil {
+			progress(fmt.Sprintf("Warning: failed to save enrichment data: %v", err))
+		}
+	}
 }
 
 // --- Discovery handlers ---
@@ -347,6 +364,9 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[deadband] Update error: %v", err)
 			return
 		}
+
+		// Fetch enrichment data
+		fetchEnrichment(s.dbPath, opts.Progress)
 
 		if err := s.reloadDB(); err != nil {
 			job.addProgress(fmt.Sprintf("Warning: failed to reload DB: %v", err))
