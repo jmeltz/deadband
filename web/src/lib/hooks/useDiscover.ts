@@ -28,7 +28,7 @@ export function useDiscover() {
         const { job_id } = await api.discover(params);
 
         cleanupRef.current = sseStream(
-          `/api/discover/${job_id}/events`,
+          `/api/discover/jobs/${job_id}/events`,
           (data) => {
             try {
               const parsed = JSON.parse(data);

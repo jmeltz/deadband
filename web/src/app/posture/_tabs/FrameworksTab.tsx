@@ -20,7 +20,7 @@ const CAPABILITY_COLORS: Record<string, string> = {
   version_check: "bg-purple-500/15 text-purple-400 border-purple-500/30",
 };
 
-export default function CompliancePage() {
+export function FrameworksTab() {
   const [framework, setFramework] = useState("");
 
   const { data, isLoading, error } = useQuery({
@@ -28,7 +28,6 @@ export default function CompliancePage() {
     queryFn: () => api.complianceMappings(framework || undefined),
   });
 
-  // Group mappings by framework
   const grouped = data?.mappings.reduce(
     (acc, m) => {
       const key = m.framework;
@@ -43,10 +42,10 @@ export default function CompliancePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-db-text">
+          <h3 className="font-heading text-sm font-semibold">
             Compliance Mapping
-          </h1>
-          <p className="text-sm text-db-muted mt-1">
+          </h3>
+          <p className="text-xs text-db-muted mt-0.5">
             Controls addressed by deadband across IEC 62443, NIST CSF 2.0, and
             NERC CIP frameworks.
           </p>

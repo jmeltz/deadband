@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/asset"
 	"github.com/jmeltz/deadband/pkg/baseline"
 	"github.com/jmeltz/deadband/pkg/cli"
 	"github.com/jmeltz/deadband/pkg/compliance"
@@ -76,6 +77,10 @@ func main() {
 		saveBaseline     bool
 		compareBaseline  bool
 		baselinePath     string
+		autoSaveAssets   bool
+		assetStorePath   string
+		serve           bool
+		serveAddr       string
 	)
 
 	flag.StringVar(&inventoryPath, "inventory", "", "Path to device inventory file (CSV, JSON, or flat)")
@@ -115,14 +120,23 @@ func main() {
 	flag.BoolVar(&compareBaseline, "compare-baseline", false, "Compare current scan against saved baseline")
 	flag.StringVar(&baselinePath, "baseline", baseline.DefaultPath(), "Custom baseline file path")
 
+	// Asset inventory flags
+	flag.BoolVar(&autoSaveAssets, "auto-save-assets", false, "Auto-import discovered devices into asset inventory")
+	flag.StringVar(&assetStorePath, "asset-store", asset.DefaultPath(), "Asset inventory file path")
+
+	// Server flags
+	flag.BoolVar(&serve, "serve", false, "Start the web UI and API server")
+	flag.StringVar(&serveAddr, "addr", ":8484", "Listen address for --serve (e.g. :8484)")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deadband [flags]\n\n")
-		fmt.Fprintf(os.Stderr, "ICS firmware vulnerability gap detector\n\n")
+		fmt.Fprintf(os.Stderr, "OT asset inventory & vulnerability scanner\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (CIP + S7 + Modbus) and check\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
 		fmt.Fprintf(os.Stderr, "  deadband pcap <file>          Extract devices from pcap capture (passive)\n")
+		fmt.Fprintf(os.Stderr, "  deadband --serve              Start the web UI and API server\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -130,6 +144,17 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if serve {
+		srv, err := server.New(serveAddr, dbPath)
+		if err != nil {
+			log.Fatalf("[deadband] Error: %v", err)
+		}
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("[deadband] Error: %v", err)
+		}
+		return
+	}
 
 	if update {
 		runUpdate(dbPath, since, source, skipEnrichment)
@@ -153,7 +178,10 @@ func main() {
 		if dryRun || len(devices) == 0 {
 			return
 		}
-		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath)
+		if autoSaveAssets {
+			saveDiscoveredAssets(devices, assetStorePath)
+		}
+		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath)
 		return
 	}
 
@@ -168,11 +196,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath)
+	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath)
 }
 
 func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Duration, concurrency int, dryRun bool) []inventory.Device {
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 
 	ips, err := discover.ExpandCIDR(cidr)
 	if err != nil {
@@ -238,7 +266,7 @@ func runPCAP(args []string) {
 	}
 	pcapPath := pcapFlags.Arg(0)
 
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 	fmt.Printf("[deadband] Analyzing pcap: %s\n", pcapPath)
 
 	result, err := pcap.Analyze(pcapPath, func(msg string) {
@@ -261,10 +289,10 @@ func runPCAP(args []string) {
 	}
 
 	// Run vulnerability check on extracted devices
-	runCheckDevices(result.Devices, *dbPath, *outputPath, *outFormat, *minConfidence, *minCVSS, *vendorFilter, edb, *prioritize, *complianceFlag, false, false, "")
+	runCheckDevices(result.Devices, *dbPath, *outputPath, *outFormat, *minConfidence, *minCVSS, *vendorFilter, edb, *prioritize, *complianceFlag, false, false, "", false, "")
 }
 
-func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string) {
+func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath string) {
 	db, err := advisory.LoadDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
@@ -349,6 +377,10 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 		os.Exit(2)
 	}
 
+	if saveAssets {
+		writeVulnStateToAssets(results, assetStorePath)
+	}
+
 	runBaseline(devices, db, opts, basePath, saveBase, compareBase)
 
 	if summary.Vulnerable > 0 || summary.Potential > 0 {
@@ -358,7 +390,7 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 }
 
 func runUpdate(dbPath, since, source string, skipEnrichment bool) {
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 	progress := func(msg string) {
 		fmt.Printf("[deadband] %s\n", msg)
 	}
@@ -409,7 +441,7 @@ func runStats(dbPath string) {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
 		os.Exit(2)
 	}
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 	fmt.Printf("[deadband] %s\n", db.Stats())
 
 	vendors := make(map[string]int)
@@ -431,7 +463,7 @@ func runStats(dbPath string) {
 }
 
 func runDiff(basePath, comparePath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string) {
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 
 	baseDevices, err := inventory.ParseFile(basePath, inputFormat)
 	if err != nil {
@@ -498,8 +530,8 @@ func runDiff(basePath, comparePath, inputFormat, dbPath, outputPath, outFormat, 
 	}
 }
 
-func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string) {
-	cli.PrintBanner("deadband", cli.Version, "ICS firmware vulnerability gap detector")
+func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath string) {
+	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 
 	db, err := advisory.LoadDatabase(dbPath)
 	if err != nil {
@@ -596,6 +628,10 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 		os.Exit(2)
 	}
 
+	if saveAssets {
+		writeVulnStateToAssets(results, assetStorePath)
+	}
+
 	runBaseline(devices, db, opts, basePath, saveBase, compareBase)
 
 	if summary.Vulnerable > 0 || summary.Potential > 0 {
@@ -689,4 +725,90 @@ func maxRiskScore(r matcher.Result) float64 {
 		}
 	}
 	return maxScore
+}
+
+// saveDiscoveredAssets imports discovered devices into the persistent asset inventory.
+func saveDiscoveredAssets(devices []inventory.Device, storePath string) {
+	store := asset.LoadOrEmpty(storePath)
+	result := store.Import(devices, "discovery")
+	if err := asset.Save(storePath, store); err != nil {
+		fmt.Fprintf(os.Stderr, "[deadband] Warning: failed to save assets: %v\n", err)
+		return
+	}
+	fmt.Printf("[deadband] Assets: %d added, %d updated (%d total)\n", result.Added, result.Updated, result.Total)
+}
+
+// writeVulnStateToAssets updates vulnerability state on persisted assets that match check results.
+func writeVulnStateToAssets(results []matcher.Result, storePath string) {
+	store := asset.LoadOrEmpty(storePath)
+	if len(store.Assets) == 0 {
+		return
+	}
+
+	// Index assets by IP+Vendor+Model for fast lookup
+	idx := make(map[string]*asset.Asset, len(store.Assets))
+	for i := range store.Assets {
+		a := &store.Assets[i]
+		key := strings.ToLower(a.IP + "|" + a.Vendor + "|" + a.Model)
+		idx[key] = a
+	}
+
+	now := time.Now().UTC()
+	updated := 0
+	for _, r := range results {
+		key := strings.ToLower(r.Device.IP + "|" + r.Device.Vendor + "|" + r.Device.Model)
+		a, ok := idx[key]
+		if !ok {
+			continue
+		}
+
+		// Use the highest confidence from matched advisories
+		bestConf := "LOW"
+		for _, m := range r.Matches {
+			c := strings.ToUpper(string(m.Confidence))
+			if c == "HIGH" || (c == "MEDIUM" && bestConf != "HIGH") {
+				bestConf = c
+			}
+		}
+		vs := &asset.VulnState{
+			CheckedAt:  now,
+			Status:     strings.ToUpper(r.Status),
+			Confidence: bestConf,
+		}
+
+		var maxRisk float64
+		var cveCount, kevCount int
+		for _, m := range r.Matches {
+			va := asset.VulnAdvisory{
+				ID:        m.Advisory.ID,
+				Title:     m.Advisory.Title,
+				CVEs:      m.Advisory.CVEs,
+				CVSSv3:    m.Advisory.CVSSv3Max,
+				KEV:       m.KEV,
+				RiskScore: m.RiskScore,
+			}
+			vs.Advisories = append(vs.Advisories, va)
+			cveCount += len(m.Advisory.CVEs)
+			if m.KEV {
+				kevCount++
+			}
+			if m.RiskScore > maxRisk {
+				maxRisk = m.RiskScore
+			}
+		}
+		vs.RiskScore = maxRisk
+		vs.CVECount = cveCount
+		vs.KEVCount = kevCount
+
+		a.VulnState = vs
+		updated++
+	}
+
+	if updated > 0 {
+		if err := asset.Save(storePath, store); err != nil {
+			fmt.Fprintf(os.Stderr, "[deadband] Warning: failed to save asset vuln state: %v\n", err)
+			return
+		}
+		fmt.Printf("[deadband] Updated vulnerability state for %d assets\n", updated)
+	}
 }

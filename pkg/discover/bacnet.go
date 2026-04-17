@@ -411,6 +411,8 @@ func BACnetIdentityToDevice(ip string, id *BACnetIdentity) inventory.Device {
 		Vendor:   id.VendorName,
 		Model:    id.ModelName,
 		Firmware: id.FirmwareRevision,
+		Protocol: "bacnet",
+		Port:     BACnetPort,
 	}
 }
 

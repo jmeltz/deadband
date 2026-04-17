@@ -211,6 +211,9 @@ func CIPIdentityToDevice(ip string, id *CIPIdentity) inventory.Device {
 		Vendor:   vendor,
 		Model:    id.ProductName,
 		Firmware: fmt.Sprintf("%d.%03d", id.RevMajor, id.RevMinor),
+		Serial:   fmt.Sprintf("%08X", id.Serial),
+		Protocol: "cip",
+		Port:     EIPPort,
 	}
 }
 
@@ -541,6 +544,10 @@ func BackplaneModuleToDevice(ip string, mod *BackplaneModule) inventory.Device {
 		Vendor:   vendor,
 		Model:    mod.ProductName,
 		Firmware: fmt.Sprintf("%d.%03d", mod.RevMajor, mod.RevMinor),
+		Serial:   fmt.Sprintf("%08X", mod.Serial),
+		Protocol: "cip",
+		Port:     EIPPort,
+		Slot:     mod.Slot,
 	}
 }
 

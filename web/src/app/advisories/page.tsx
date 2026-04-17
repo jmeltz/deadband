@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useAdvisories } from "@/lib/hooks/useAdvisories";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { CvssBadge } from "@/components/advisory/CvssBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { api, sseStream } from "@/lib/api";
-import Link from "next/link";
+import { AdvisoryDetailDrawer } from "./_components/AdvisoryDetailDrawer";
 
 type SortField = "published" | "cvss" | "id" | "vendor";
 type SortDir = "asc" | "desc";
@@ -20,7 +21,25 @@ const defaultSortDir: Record<SortField, SortDir> = {
   vendor: "asc",
 };
 
-export default function AdvisoriesPage() {
+function AdvisoriesContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selectedAdvisory = searchParams.get("advisory");
+
+  const openAdvisory = (id: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("advisory", id);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
+  const closeAdvisory = () => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("advisory");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [vendor, setVendor] = useState("");
@@ -238,15 +257,11 @@ export default function AdvisoriesPage() {
               {data.advisories.map((a, i) => (
                 <tr
                   key={a.id}
-                  className={`border-b border-db-border/50 table-row-hover transition-colors ${i % 2 === 0 ? "" : "bg-db-bg/30"}`}
+                  onClick={() => openAdvisory(a.id)}
+                  className={`border-b border-db-border/50 table-row-hover transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-db-bg/30"}`}
                 >
-                  <td className="px-4 py-2.5">
-                    <Link
-                      href={`/advisories/detail?id=${a.id}`}
-                      className="font-mono text-xs text-status-info hover:text-db-text transition-colors"
-                    >
-                      {a.id}
-                    </Link>
+                  <td className="px-4 py-2.5 font-mono text-xs text-status-info">
+                    {a.id}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-db-text max-w-md truncate">
                     {a.title}
@@ -292,6 +307,11 @@ export default function AdvisoriesPage() {
           </Button>
         </div>
       )}
+
+      <AdvisoryDetailDrawer
+        advisoryId={selectedAdvisory}
+        onClose={closeAdvisory}
+      />
     </div>
   );
 }
@@ -343,5 +363,13 @@ function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }
         ×
       </button>
     </span>
+  );
+}
+
+export default function AdvisoriesPage() {
+  return (
+    <Suspense>
+      <AdvisoriesContent />
+    </Suspense>
   );
 }

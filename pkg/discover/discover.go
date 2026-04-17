@@ -343,6 +343,19 @@ func runHTTP(opts Opts, ips []string) ([]inventory.Device, error) {
 			Vendor:   "Rockwell Automation",
 			Model:    info["Device Name"],
 			Firmware: info["Product Revision"],
+			Serial:   info["Serial Number"],
+			MAC:      info["Ethernet Address (MAC)"],
+			Protocol: "cip",
+			Port:     EIPPort,
+		}
+		if info["Status"] != "" || info["Uptime"] != "" {
+			dev.Extra = map[string]string{}
+			if v := info["Status"]; v != "" {
+				dev.Extra["status"] = v
+			}
+			if v := info["Uptime"]; v != "" {
+				dev.Extra["uptime"] = v
+			}
 		}
 		if dev.Model != "" {
 			devices = append(devices, dev)

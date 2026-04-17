@@ -109,6 +109,13 @@ Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial
 | `--since` | (all) | Only fetch after date (`YYYY-MM-DD`) |
 | `--source` | | Local CSAF mirror path (air-gapped) |
 
+### Server Mode
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--serve` | `false` | Start the web UI and API server |
+| `--addr` | `:8484` | Listen address for `--serve` |
+
 ### Other
 
 | Flag | Description |
@@ -158,7 +165,7 @@ make deadband-web
 bin/deadband serve
 ```
 
-The UI provides a dashboard, advisory browser, vulnerability check, network discovery, inventory diff, and database management — all with a dark industrial aesthetic.
+The UI provides a dashboard, advisory browser, vulnerability check, network discovery, inventory diff, site management, and database management — all with a dark industrial aesthetic.
 
 For development, run the Go API and Next.js dev server separately:
 
@@ -169,6 +176,52 @@ go run ./cmd/deadband serve
 # Terminal 2: Frontend with hot reload (proxies /api/* to :8484)
 cd web && npm run dev
 ```
+
+## Sites
+
+Sites define named network locations with CIDR subnets. When a site is defined, assets are automatically assigned to it based on their IP address matching the site's CIDRs.
+
+Sites are managed through the web UI (Sites page) or the API:
+
+```bash
+# Create a site
+curl -X POST http://localhost:8484/api/sites \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Plant A","cidrs":["10.0.1.0/24","10.0.2.0/24"],"location":"Chicago, IL"}'
+
+# List sites
+curl http://localhost:8484/api/sites
+
+# Reassign all assets to sites based on CIDR matching
+curl -X POST http://localhost:8484/api/sites/reassign
+```
+
+When devices are discovered or imported, they are automatically assigned to a matching site. The reassign endpoint re-evaluates all assets against current site definitions.
+
+## .dbd Export/Import
+
+deadband supports exporting and importing complete asset inventories (including site definitions) using the `.dbd` file format for transferring data between instances.
+
+The `.dbd` format is CSV with site metadata encoded as comment headers:
+
+```
+# deadband export v1
+# exported: 2026-04-14T21:30:00Z
+# site: Plant-A|10.0.1.0/24,10.0.2.0/24|Building 7|Chicago IL|ops@example.com
+# site: Plant-B|10.0.3.0/24|Building 12|Detroit MI|
+ID,IP,Vendor,Model,Firmware,Name,Site,Zone,Criticality,Status,...
+```
+
+```bash
+# Export (API)
+curl http://localhost:8484/api/assets/export?format=dbd -o assets.dbd
+
+# Import into another instance
+curl -X POST http://other-host:8484/api/assets/import/dbd \
+  --data-binary @assets.dbd -H 'Content-Type: text/csv'
+```
+
+Export and import are also available in the web UI on the Assets page.
 
 ## Active Scanning Protocols
 
@@ -219,12 +272,14 @@ deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendo
 ```
 cmd/deadband/main.go       # CLI entrypoint
 pkg/advisory/advisory.go   # Advisory DB load/save/query
+pkg/asset/                 # Asset inventory store + vulnerability state
 pkg/cli/banner.go          # Safety banner
 pkg/discover/              # Multi-protocol device discovery (CIP, S7comm, Modbus TCP, SLMP, BACnet/IP, FINS, GE-SRTP)
 pkg/inventory/inventory.go # Multi-format inventory parsing
 pkg/matcher/               # Vendor, model, version matching
-pkg/output/                # Text, CSV, JSON formatters
+pkg/output/                # Text, CSV, JSON, .dbd formatters
 pkg/server/                # HTTP API + embedded frontend
+pkg/site/                  # Site management (CIDR-based asset grouping)
 pkg/updater/               # CISA CSAF fetch and cache
 web/                       # Next.js frontend (static export)
 ```

@@ -11,6 +11,9 @@ export function useAssets(params?: {
   tag?: string;
   q?: string;
   sort?: string;
+  status?: string;
+  vuln_status?: string;
+  cve?: string;
 }) {
   return useQuery({
     queryKey: ["assets", params],
@@ -49,6 +52,21 @@ export function useDeleteAsset() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteAsset(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["assets"] });
+    },
+  });
+}
+
+export function useCheckAssets() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: {
+      ids?: string[];
+      site?: string;
+      zone?: string;
+      criticality?: string;
+    }) => api.checkAssets(params),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["assets"] });
     },
