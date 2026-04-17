@@ -4,10 +4,12 @@ import { usePathname } from "next/navigation";
 
 const titles: Record<string, string> = {
   "/": "Dashboard",
-  "/devices": "Devices",
+  "/assets": "Assets",
+  "/assets/detail": "Asset Detail",
   "/advisories": "Advisories",
-  "/advisories/detail": "Advisory Detail",
-  "/diff": "Inventory Diff",
+  "/posture": "Posture",
+  "/sites": "Sites",
+  "/acl": "ACL",
   "/settings": "Settings",
 };
 

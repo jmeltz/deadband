@@ -15,6 +15,15 @@ type Device struct {
 	Vendor   string `json:"vendor"`
 	Model    string `json:"model"`
 	Firmware string `json:"firmware"`
+	// Hardware identity (populated by protocol scanners when available)
+	Serial   string            `json:"serial,omitempty"`
+	MAC      string            `json:"mac,omitempty"`
+	Hostname string            `json:"hostname,omitempty"`
+	OrderNum string            `json:"order_number,omitempty"`
+	Protocol string            `json:"protocol,omitempty"` // cip, s7, modbus, bacnet, fins, melsec, srtp, opcua
+	Port     int               `json:"port,omitempty"`
+	Slot     int               `json:"slot,omitempty"`
+	Extra    map[string]string `json:"extra,omitempty"`
 }
 
 func ParseFile(path string, format string) ([]Device, error) {
@@ -104,6 +113,14 @@ func parseCSV(r io.Reader) ([]Device, error) {
 			if i, ok := colIndex["Product Revision"]; ok && i < len(record) {
 				dev.Firmware = strings.TrimSpace(record[i])
 			}
+			if i, ok := colIndex["Serial Number"]; ok && i < len(record) {
+				dev.Serial = strings.TrimSpace(record[i])
+			}
+			if i, ok := colIndex["Ethernet Address (MAC)"]; ok && i < len(record) {
+				dev.MAC = strings.TrimSpace(record[i])
+			} else if i, ok := colIndex["MAC"]; ok && i < len(record) {
+				dev.MAC = strings.TrimSpace(record[i])
+			}
 		} else {
 			// Generic CSV: IP, Vendor, Model, Firmware
 			if len(record) >= 4 {
@@ -146,12 +163,24 @@ func parseJSON(r io.Reader) ([]Device, error) {
 			if ip == "" {
 				ip = r.ScannedIP
 			}
-			devices = append(devices, Device{
+			d := Device{
 				IP:       ip,
 				Vendor:   "Rockwell Automation",
 				Model:    r.DeviceName,
 				Firmware: r.ProductRevision,
-			})
+				Serial:   r.Serial,
+				MAC:      r.MAC,
+			}
+			if r.Status != "" || r.Uptime != "" {
+				d.Extra = map[string]string{}
+				if r.Status != "" {
+					d.Extra["status"] = r.Status
+				}
+				if r.Uptime != "" {
+					d.Extra["uptime"] = r.Uptime
+				}
+			}
+			devices = append(devices, d)
 		}
 		return devices, nil
 	}

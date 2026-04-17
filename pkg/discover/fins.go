@@ -159,6 +159,8 @@ func FINSIdentityToDevice(ip string, id *FINSIdentity) inventory.Device {
 		Vendor:   "Omron",
 		Model:    id.Model,
 		Firmware: id.Version,
+		Protocol: "fins",
+		Port:     FINSPort,
 	}
 }
 

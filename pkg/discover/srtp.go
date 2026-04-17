@@ -219,9 +219,11 @@ func SRTPIdentify(ip string, timeout time.Duration) (*SRTPIdentity, error) {
 // SRTPIdentityToDevice converts an SRTPIdentity to an inventory.Device.
 func SRTPIdentityToDevice(ip string, id *SRTPIdentity) inventory.Device {
 	return inventory.Device{
-		IP:     ip,
-		Vendor: "Emerson / GE",
-		Model:  id.Model,
+		IP:       ip,
+		Vendor:   "Emerson / GE",
+		Model:    id.Model,
+		Protocol: "srtp",
+		Port:     SRTPPort,
 	}
 }
 

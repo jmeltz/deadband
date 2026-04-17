@@ -256,6 +256,8 @@ func ModbusIdentityToDevice(ip string, id *ModbusIdentity) inventory.Device {
 		Vendor:   vendor,
 		Model:    model,
 		Firmware: id.Revision,
+		Protocol: "modbus",
+		Port:     ModbusTCPPort,
 	}
 }
 

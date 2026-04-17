@@ -30,6 +30,19 @@ type Asset struct {
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
 	Source      string    `json:"source"` // discovery, upload, manual
+	// Hardware identity (populated by protocol scanners)
+	Serial   string `json:"serial,omitempty"`
+	MAC      string `json:"mac,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	OrderNum string `json:"order_number,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+	Port     int               `json:"port,omitempty"`
+	Slot     int               `json:"slot,omitempty"`
+	Extra    map[string]string `json:"extra,omitempty"`
+	// Lifecycle
+	Status string `json:"status"` // active, retired, quarantined, unknown
+	// Vulnerability state (populated by asset checks)
+	VulnState *VulnState `json:"vuln_state,omitempty"`
 }
 
 // Store holds the persisted asset inventory.
@@ -90,24 +103,68 @@ type ImportResult struct {
 	Total   int `json:"total"`
 }
 
-// Import merges devices into the store. Existing assets (matched by IP+Vendor+Model)
-// get their firmware and last_seen updated. New devices are added as new assets.
+// Import merges devices into the store. Existing assets are matched first by
+// IP+Vendor+Model, then by Serial number (handles DHCP re-addressing).
+// New devices are added as new assets.
 func (s *Store) Import(devices []inventory.Device, source string) ImportResult {
 	now := time.Now().UTC()
 	result := ImportResult{}
 
-	// Index existing assets by dedup key
+	// Index existing assets by dedup key and serial
 	idx := make(map[string]int, len(s.Assets))
+	serialIdx := make(map[string]int, len(s.Assets))
 	for i, a := range s.Assets {
 		idx[dedupKey(a.IP, a.Vendor, a.Model)] = i
+		if a.Serial != "" {
+			serialIdx[strings.ToLower(a.Serial)] = i
+		}
 	}
 
 	for _, d := range devices {
 		key := dedupKey(d.IP, d.Vendor, d.Model)
-		if i, ok := idx[key]; ok {
-			// Update existing
+		i, ok := idx[key]
+		// Fallback: match by serial (handles DHCP re-addressing)
+		if !ok && d.Serial != "" {
+			if si, sok := serialIdx[strings.ToLower(d.Serial)]; sok {
+				i, ok = si, true
+				// Track IP change
+				if s.Assets[i].IP != d.IP {
+					if s.Assets[i].Extra == nil {
+						s.Assets[i].Extra = map[string]string{}
+					}
+					s.Assets[i].Extra["previous_ip"] = s.Assets[i].IP
+					s.Assets[i].IP = d.IP
+					// Update primary index
+					delete(idx, dedupKey(s.Assets[i].IP, s.Assets[i].Vendor, s.Assets[i].Model))
+					idx[key] = i
+				}
+			}
+		}
+		if ok {
+			// Update existing — refresh firmware, hardware fields, and last seen
 			s.Assets[i].Firmware = d.Firmware
 			s.Assets[i].LastSeen = now
+			if d.Serial != "" {
+				s.Assets[i].Serial = d.Serial
+			}
+			if d.MAC != "" {
+				s.Assets[i].MAC = d.MAC
+			}
+			if d.Hostname != "" {
+				s.Assets[i].Hostname = d.Hostname
+			}
+			if d.OrderNum != "" {
+				s.Assets[i].OrderNum = d.OrderNum
+			}
+			if d.Protocol != "" {
+				s.Assets[i].Protocol = d.Protocol
+			}
+			if d.Port != 0 {
+				s.Assets[i].Port = d.Port
+			}
+			if d.Slot != 0 {
+				s.Assets[i].Slot = d.Slot
+			}
 			result.Updated++
 		} else {
 			// New asset
@@ -117,9 +174,17 @@ func (s *Store) Import(devices []inventory.Device, source string) ImportResult {
 				Vendor:    d.Vendor,
 				Model:     d.Model,
 				Firmware:  d.Firmware,
+				Serial:    d.Serial,
+				MAC:       d.MAC,
+				Hostname:  d.Hostname,
+				OrderNum:  d.OrderNum,
+				Protocol:  d.Protocol,
+				Port:      d.Port,
+				Slot:      d.Slot,
 				FirstSeen: now,
 				LastSeen:  now,
 				Source:    source,
+				Status:    "active",
 				Tags:      []string{},
 			}
 			idx[key] = len(s.Assets)
@@ -167,6 +232,12 @@ func (s *Store) Update(id string, patch AssetPatch) bool {
 	if patch.Notes != nil {
 		a.Notes = *patch.Notes
 	}
+	if patch.Status != nil {
+		a.Status = *patch.Status
+	}
+	if patch.Hostname != nil {
+		a.Hostname = *patch.Hostname
+	}
 	return true
 }
 
@@ -189,6 +260,8 @@ type AssetPatch struct {
 	Criticality *string  `json:"criticality,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Notes       *string  `json:"notes,omitempty"`
+	Status      *string  `json:"status,omitempty"`
+	Hostname    *string  `json:"hostname,omitempty"`
 }
 
 // FilterOpts controls asset list filtering and sorting.
@@ -201,6 +274,10 @@ type FilterOpts struct {
 	Search      string
 	SortField   string // ip, vendor, model, firmware, name, site, zone, criticality, first_seen, last_seen
 	SortAsc     bool
+	// Phase 1 additions
+	Status     string // active, retired, quarantined
+	VulnStatus string // VULNERABLE, POTENTIAL, OK, UNCHECKED
+	CVE        string // filter assets affected by a specific CVE
 }
 
 // Filter returns assets matching the given options.
@@ -222,6 +299,20 @@ func (s *Store) Filter(opts FilterOpts) []Asset {
 		if opts.Tag != "" && !hasTag(a.Tags, opts.Tag) {
 			continue
 		}
+		if opts.Status != "" && !strings.EqualFold(a.Status, opts.Status) {
+			continue
+		}
+		if opts.VulnStatus != "" {
+			if a.VulnState == nil && !strings.EqualFold(opts.VulnStatus, "UNCHECKED") {
+				continue
+			}
+			if a.VulnState != nil && !strings.EqualFold(a.VulnState.Status, opts.VulnStatus) {
+				continue
+			}
+		}
+		if opts.CVE != "" && !assetHasCVE(a, opts.CVE) {
+			continue
+		}
 		if opts.Search != "" {
 			q := strings.ToLower(opts.Search)
 			if !strings.Contains(strings.ToLower(a.IP), q) &&
@@ -229,6 +320,8 @@ func (s *Store) Filter(opts FilterOpts) []Asset {
 				!strings.Contains(strings.ToLower(a.Model), q) &&
 				!strings.Contains(strings.ToLower(a.Name), q) &&
 				!strings.Contains(strings.ToLower(a.Notes), q) &&
+				!strings.Contains(strings.ToLower(a.Serial), q) &&
+				!strings.Contains(strings.ToLower(a.Hostname), q) &&
 				!anyTagContains(a.Tags, q) {
 				continue
 			}
@@ -337,6 +430,124 @@ func anyTagContains(tags []string, q string) bool {
 		}
 	}
 	return false
+}
+
+// Summary computes aggregate statistics across all assets.
+type Summary struct {
+	TotalAssets    int                       `json:"total_assets"`
+	ByStatus       map[string]int            `json:"by_status"`
+	ByCriticality  map[string]int            `json:"by_criticality"`
+	ByVulnStatus   map[string]int            `json:"by_vuln_status"`
+	BySite         map[string]SiteSummary    `json:"by_site"`
+	TopCVEs        []CVECount                `json:"top_cves"`
+	KEVAffected    int                       `json:"kev_affected_assets"`
+	StaleAssets    int                       `json:"stale_assets"`
+	LastCheck      string                    `json:"last_check,omitempty"`
+}
+
+// SiteSummary holds per-site rollup.
+type SiteSummary struct {
+	Total      int `json:"total"`
+	Vulnerable int `json:"vulnerable"`
+}
+
+// CVECount tracks how many assets are affected by a CVE.
+type CVECount struct {
+	CVE            string `json:"cve"`
+	AffectedAssets int    `json:"affected_assets"`
+}
+
+// ComputeSummary returns aggregate stats for the asset store.
+func (s *Store) ComputeSummary() Summary {
+	sum := Summary{
+		TotalAssets:   len(s.Assets),
+		ByStatus:      map[string]int{},
+		ByCriticality: map[string]int{},
+		ByVulnStatus:  map[string]int{},
+		BySite:        map[string]SiteSummary{},
+	}
+
+	staleThreshold := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	cveMap := map[string]int{}
+	var latestCheck time.Time
+
+	for _, a := range s.Assets {
+		// Status
+		status := a.Status
+		if status == "" {
+			status = "unknown"
+		}
+		sum.ByStatus[status]++
+
+		// Criticality
+		crit := a.Criticality
+		if crit == "" {
+			crit = "unassigned"
+		}
+		sum.ByCriticality[crit]++
+
+		// Vuln status
+		vs := "UNCHECKED"
+		isVuln := false
+		if a.VulnState != nil {
+			vs = a.VulnState.Status
+			if a.VulnState.Status == "VULNERABLE" {
+				isVuln = true
+			}
+			if a.VulnState.KEVCount > 0 {
+				sum.KEVAffected++
+			}
+			if a.VulnState.CheckedAt.After(latestCheck) {
+				latestCheck = a.VulnState.CheckedAt
+			}
+			for _, adv := range a.VulnState.Advisories {
+				for _, cve := range adv.CVEs {
+					cveMap[cve]++
+				}
+			}
+		}
+		sum.ByVulnStatus[vs]++
+
+		// Site
+		site := a.Site
+		if site == "" {
+			site = "(unassigned)"
+		}
+		ss := sum.BySite[site]
+		ss.Total++
+		if isVuln {
+			ss.Vulnerable++
+		}
+		sum.BySite[site] = ss
+
+		// Stale
+		if !a.LastSeen.IsZero() && a.LastSeen.Before(staleThreshold) {
+			sum.StaleAssets++
+		}
+	}
+
+	if !latestCheck.IsZero() {
+		sum.LastCheck = latestCheck.Format(time.RFC3339)
+	}
+
+	// Top CVEs (up to 10)
+	type kv struct {
+		k string
+		v int
+	}
+	var cvePairs []kv
+	for k, v := range cveMap {
+		cvePairs = append(cvePairs, kv{k, v})
+	}
+	sort.Slice(cvePairs, func(i, j int) bool { return cvePairs[i].v > cvePairs[j].v })
+	if len(cvePairs) > 10 {
+		cvePairs = cvePairs[:10]
+	}
+	for _, p := range cvePairs {
+		sum.TopCVEs = append(sum.TopCVEs, CVECount{CVE: p.k, AffectedAssets: p.v})
+	}
+
+	return sum
 }
 
 func dedupKey(ip, vendor, model string) string {

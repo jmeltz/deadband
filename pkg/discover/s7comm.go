@@ -366,6 +366,10 @@ func S7IdentityToDevice(ip string, id *S7Identity) inventory.Device {
 		Vendor:   "Siemens",
 		Model:    model,
 		Firmware: fw,
+		Serial:   id.SerialNumber,
+		OrderNum: id.OrderNumber,
+		Protocol: "s7",
+		Port:     S7Port,
 	}
 }
 

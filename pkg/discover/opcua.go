@@ -33,6 +33,8 @@ func opcuaIdentityToDevice(ip string, id *OPCUAIdentity) inventory.Device {
 		Vendor:   vendor,
 		Model:    model,
 		Firmware: "", // OPC UA doesn't reliably expose firmware versions
+		Protocol: "opcua",
+		Port:     OPCUAPort,
 	}
 }
 

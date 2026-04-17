@@ -172,9 +172,11 @@ func SLMPIdentify(ip string, timeout time.Duration) (*SLMPIdentity, error) {
 // SLMPIdentityToDevice converts an SLMPIdentity to an inventory.Device.
 func SLMPIdentityToDevice(ip string, id *SLMPIdentity) inventory.Device {
 	return inventory.Device{
-		IP:     ip,
-		Vendor: "Mitsubishi Electric",
-		Model:  id.ModelName,
+		IP:       ip,
+		Vendor:   "Mitsubishi Electric",
+		Model:    id.ModelName,
+		Protocol: "melsec",
+		Port:     SLMPPort,
 	}
 }
 

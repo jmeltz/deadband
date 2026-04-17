@@ -13,13 +13,14 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useCheckUpload } from "@/lib/hooks/useCheck";
 import { useDiscover } from "@/lib/hooks/useDiscover";
 import { useImportAssets } from "@/lib/hooks/useAssets";
+import { useSites } from "@/lib/hooks/useSites";
 import type { Device, CheckResponse, CheckDeviceResult } from "@/lib/types";
 import Link from "next/link";
 
 type InputMode = "upload" | "discover";
 
-export default function DevicesPage() {
-  const [inputMode, setInputMode] = useState<InputMode>("upload");
+export function DiscoverTab({ onImported }: { onImported?: () => void }) {
+  const [inputMode, setInputMode] = useState<InputMode>("discover");
   const [devices, setDevices] = useState<Device[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -36,6 +37,9 @@ export default function DevicesPage() {
   const qc = useQueryClient();
   const checkResults = qc.getQueryData<CheckResponse>(["check-results"]);
 
+  // Sites for CIDR autofill
+  const { data: sites } = useSites();
+
   // Asset import
   const importAssets = useImportAssets();
   const [importResult, setImportResult] = useState<{ added: number; updated: number } | null>(null);
@@ -51,7 +55,6 @@ export default function DevicesPage() {
   useEffect(() => {
     if (discoverResult?.devices && discoverResult.devices.length > 0) {
       setDevices(discoverResult.devices);
-      // If auto-check was on and results came back, cache them
       if (discoverResult.check_results) {
         qc.setQueryData(["check-results"], discoverResult.check_results);
       }
@@ -138,34 +141,29 @@ export default function DevicesPage() {
   const summary = checkResults?.summary;
 
   return (
-    <div className="max-w-6xl space-y-4">
-      {/* Input mode tabs */}
-      <div className="flex items-center gap-1 border-b border-db-border">
-        <button
-          onClick={() => setInputMode("upload")}
-          className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-            inputMode === "upload"
-              ? "text-db-teal-light"
-              : "text-db-muted hover:text-db-text"
-          }`}
-        >
-          Upload Inventory
-          {inputMode === "upload" && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-db-teal-light" />
-          )}
-        </button>
+    <div className="space-y-4">
+      {/* Input mode sub-tabs */}
+      <div className="flex items-center gap-4">
         <button
           onClick={() => setInputMode("discover")}
-          className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
+          className={`text-sm font-medium transition-colors ${
             inputMode === "discover"
               ? "text-db-teal-light"
               : "text-db-muted hover:text-db-text"
           }`}
         >
-          Network Discovery
-          {inputMode === "discover" && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-db-teal-light" />
-          )}
+          Network Scan
+        </button>
+        <span className="text-db-border">|</span>
+        <button
+          onClick={() => setInputMode("upload")}
+          className={`text-sm font-medium transition-colors ${
+            inputMode === "upload"
+              ? "text-db-teal-light"
+              : "text-db-muted hover:text-db-text"
+          }`}
+        >
+          Upload File
         </button>
       </div>
 
@@ -181,6 +179,27 @@ export default function DevicesPage() {
       {inputMode === "discover" && (
         <Card>
           <form onSubmit={handleDiscover} className="flex items-end gap-3">
+            {sites && sites.length > 0 && (
+              <div>
+                <label className="block text-xs text-db-muted mb-1.5">Site</label>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const s = sites.find((s) => s.id === e.target.value);
+                    if (s) setCidr(s.cidrs[0] || "");
+                  }}
+                  disabled={discoverStatus === "running"}
+                  className="bg-db-bg border border-db-border px-3 py-2 text-sm text-db-text focus:outline-none input-industrial"
+                >
+                  <option value="">Select site...</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.cidrs.join(", ")})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex-1">
               <label className="block text-xs text-db-muted mb-1.5">CIDR Range</label>
               <input
@@ -308,11 +327,14 @@ export default function DevicesPage() {
                 onClick={() => {
                   const source = inputMode === "discover" ? "discovery" : "upload";
                   importAssets.mutate({ devices, source }, {
-                    onSuccess: (data) => setImportResult(data),
+                    onSuccess: (data) => {
+                      setImportResult(data);
+                      onImported?.();
+                    },
                   });
                 }}
               >
-                {importAssets.isPending ? "Saving..." : importResult ? `Saved (${importResult.added} new, ${importResult.updated} updated)` : "Save to Assets"}
+                {importAssets.isPending ? "Saving..." : importResult ? `Saved (${importResult.added} new, ${importResult.updated} updated)` : "Save to Inventory"}
               </Button>
               {file && (
                 <Button
@@ -419,7 +441,7 @@ function DeviceRow({
           {checkResult ? (
             <StatusBadge status={checkResult.status} />
           ) : (
-            <span className="text-[10px] text-db-muted">—</span>
+            <span className="text-[10px] text-db-muted">&mdash;</span>
           )}
         </td>
         {hasCheck && (
@@ -442,7 +464,7 @@ function DeviceRow({
               <CvssBadge score={adv.cvss_v3} />
               {adv.kev && <KEVBadge ransomware={adv.kev_ransomware} />}
               <Link
-                href={`/advisories/detail?id=${adv.id}`}
+                href={`/advisories?advisory=${adv.id}`}
                 className="font-mono text-xs text-status-info hover:text-db-text"
                 onClick={(e) => e.stopPropagation()}
               >

@@ -20,6 +20,10 @@ const (
 	OPCUAPort     = 4840
 )
 
+// MaxCIDRHosts caps the number of addresses ExpandCIDR will return,
+// guarding against accidental /0-/8 expansions that would OOM the process.
+const MaxCIDRHosts = 1 << 20 // 1,048,576
+
 // ExpandCIDR returns all usable host IPs in a CIDR range.
 // Single IPs without a mask are treated as /32.
 func ExpandCIDR(cidr string) ([]string, error) {
@@ -30,6 +34,11 @@ func ExpandCIDR(cidr string) ([]string, error) {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+	}
+
+	ones, bits := ipNet.Mask.Size()
+	if hostBits := bits - ones; hostBits >= 63 || uint64(1)<<uint(hostBits) > MaxCIDRHosts {
+		return nil, fmt.Errorf("CIDR %q too large: %d hosts exceeds limit %d", cidr, uint64(1)<<uint(hostBits), MaxCIDRHosts)
 	}
 
 	var ips []string

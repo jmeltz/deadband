@@ -4,13 +4,12 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { FileUpload } from "@/components/ui/FileUpload";
-import { StatusBadge } from "@/components/ui/Badge";
 import { CvssBadge } from "@/components/advisory/CvssBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useDiffUpload } from "@/lib/hooks/useDiff";
 import type { DiffResponse } from "@/lib/types";
 
-export default function DiffPage() {
+export function CompareTab() {
   const [baseFile, setBaseFile] = useState<File | null>(null);
   const [compareFile, setCompareFile] = useState<File | null>(null);
   const diffUpload = useDiffUpload();
@@ -22,7 +21,7 @@ export default function DiffPage() {
   };
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       {/* Upload zone */}
       <div className="grid grid-cols-2 gap-4">
         <div>
