@@ -373,6 +373,19 @@ export const api = {
     );
   },
 
+  simulatePolicy: (body: {
+    site_id: string;
+    policy_id: string;
+    planned_policy: import("./types").Policy;
+    flow_window?: "24h" | "7d" | "30d";
+    include_observed?: boolean;
+    include_implied?: boolean;
+  }) =>
+    request<import("./types").SimulationResponse>("/api/acl/simulate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   // Integrations — Sentinel
   getSentinelConfigs: () =>
     request<import("./types").SentinelConfig[]>("/api/integrations/sentinel"),

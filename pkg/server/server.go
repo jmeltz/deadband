@@ -185,6 +185,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/acl/policies/{id}", s.handleDeletePolicy)
 	s.mux.HandleFunc("POST /api/acl/policies/generate", s.handleGenerateDefaultPolicy)
 	s.mux.HandleFunc("POST /api/acl/policies/{id}/analyze", s.handleAnalyzeGaps)
+	s.mux.HandleFunc("POST /api/acl/simulate", s.handleSimulatePolicy)
 
 	// Serve embedded frontend if available
 	mountFrontend(s.mux)
