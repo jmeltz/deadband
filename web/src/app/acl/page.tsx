@@ -14,6 +14,7 @@ import { useSites } from "@/lib/hooks/useSites";
 import { useTrafficSummary, useScopingRecommendations } from "@/lib/hooks/useSentinel";
 import { useDriftAnalysis } from "@/lib/hooks/useASA";
 import type { Policy, PolicyRule, Violation, Zone, ZoneTrafficSummary, ScopingRecommendation, PolicyDrift } from "@/lib/types";
+import { PolicyPlanner } from "./_components/PolicyPlanner";
 
 const sevColors: Record<string, string> = {
   critical: "bg-status-critical/20 text-status-critical border-status-critical/40",
@@ -38,6 +39,7 @@ export default function ACLPage() {
 
   const [selectedSiteId, setSelectedSiteId] = useState("");
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  const [plannerOpen, setPlannerOpen] = useState(false);
 
   // Find sites with zones
   const zonedSites = (sites ?? []).filter(
@@ -158,8 +160,19 @@ export default function ACLPage() {
       {/* Zone matrix + analysis tabs */}
       {selectedPolicy && zones.length > 0 && (
         <>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setPlannerOpen(true)}>
+              Plan Change
+            </Button>
+          </div>
           <ZoneMatrixWithTraffic policy={selectedPolicy} zones={zones} siteId={selectedPolicy.site_id} />
           <AnalysisTabs policy={selectedPolicy} />
+          <PolicyPlanner
+            open={plannerOpen}
+            onClose={() => setPlannerOpen(false)}
+            policy={selectedPolicy}
+            zones={zones}
+          />
         </>
       )}
 

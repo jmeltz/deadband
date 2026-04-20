@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmeltz/deadband/pkg/acl"
 	"github.com/jmeltz/deadband/pkg/asa"
+	"github.com/jmeltz/deadband/pkg/flow"
 	"github.com/jmeltz/deadband/pkg/integration"
 	"github.com/jmeltz/deadband/pkg/sentinel"
 )
@@ -243,19 +245,19 @@ func (s *Server) handleGetTrafficSummary(w http.ResponseWriter, r *http.Request)
 
 	snap := s.sentinelStore.GetLatest(siteID)
 	if snap == nil {
-		writeJSON(w, http.StatusOK, []sentinel.ZoneTrafficSummary{})
+		writeJSON(w, http.StatusOK, []flow.ZoneTrafficSummary{})
 		return
 	}
 
 	st := s.siteStore.Get(siteID)
 	if st == nil || len(st.Zones) == 0 {
-		writeJSON(w, http.StatusOK, []sentinel.ZoneTrafficSummary{})
+		writeJSON(w, http.StatusOK, []flow.ZoneTrafficSummary{})
 		return
 	}
 
-	summaries := sentinel.ComputeTrafficSummary(snap.Flows, st.Zones)
+	summaries := flow.ComputeTrafficSummary(snap.Flows, st.Zones)
 	if summaries == nil {
-		summaries = []sentinel.ZoneTrafficSummary{}
+		summaries = []flow.ZoneTrafficSummary{}
 	}
 	writeJSON(w, http.StatusOK, summaries)
 }
@@ -283,13 +285,13 @@ func (s *Server) handleScopingRecommendations(w http.ResponseWriter, r *http.Req
 
 	snap := s.sentinelStore.GetLatest(st.ID)
 	if snap == nil {
-		writeJSON(w, http.StatusOK, []sentinel.ScopingRecommendation{})
+		writeJSON(w, http.StatusOK, []acl.ScopingRecommendation{})
 		return
 	}
 
-	recs := sentinel.BuildScopingRecommendations(*policy, snap.Flows, st.Zones)
+	recs := acl.BuildScopingRecommendations(*policy, snap.Flows, st.Zones)
 	if recs == nil {
-		recs = []sentinel.ScopingRecommendation{}
+		recs = []acl.ScopingRecommendation{}
 	}
 	writeJSON(w, http.StatusOK, recs)
 }

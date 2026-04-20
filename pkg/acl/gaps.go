@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/jmeltz/deadband/pkg/flow"
 	"github.com/jmeltz/deadband/pkg/posture"
 	"github.com/jmeltz/deadband/pkg/site"
 )
@@ -18,7 +19,7 @@ type Violation struct {
 	FlowIdentities []FlowIdentity `json:"flow_identities,omitempty"`
 }
 
-// FlowIdentity represents identity info from Sentinel flows on a violation path.
+// FlowIdentity represents identity info from observed flows on a violation path.
 type FlowIdentity struct {
 	UserName   string `json:"user_name"`
 	Department string `json:"department"`
@@ -34,20 +35,17 @@ type ViolatorHost struct {
 	DestZone   string `json:"dest_zone"`
 }
 
-// GapOpts provides optional enrichment data for gap analysis.
+// GapOpts carries optional enrichment data for gap analysis. Flows are
+// bucketed internally by zone pair; callers just hand over the raw slice.
 type GapOpts struct {
-	// FlowZonePorts maps "srcZone|dstZone|port" to flow count
-	FlowZonePorts map[string]int
-	// FlowIdentities maps "srcZone|dstZone" to identity info
-	FlowZoneIdentities map[string][]FlowIdentity
+	Flows []flow.FlowRecord
 }
 
-// AnalyzeGaps compares a policy's deny rules against the actual posture scan results.
-// For each "deny" rule, it checks if hosts in the source zone have open ports
-// that could reach hosts in the dest zone. Optional GapOpts enrich violations
-// with Sentinel flow data.
+// AnalyzeGaps compares a policy's deny rules against the actual posture scan
+// results. For each "deny" rule, it checks if hosts in the dest zone expose
+// ports the rule denies. Optional GapOpts enrich violations with observed
+// traffic and identity metadata.
 func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone, opts ...GapOpts) []Violation {
-	// Build zone-to-CIDR mapping
 	type parsedZone struct {
 		name    string
 		purpose string
@@ -66,7 +64,6 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 		pz = append(pz, parsedZone{name: z.Name, purpose: z.Purpose, nets: nets})
 	}
 
-	// Map IPs to zone names
 	ipToZone := func(ipStr string) string {
 		ip := net.ParseIP(ipStr)
 		if ip == nil {
@@ -82,7 +79,6 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 		return ""
 	}
 
-	// Collect all hosts from the report with their zone assignments
 	type hostInfo struct {
 		host posture.ClassifiedHost
 		zone string
@@ -98,7 +94,6 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 		}
 	}
 
-	// Group hosts by zone
 	hostsByZone := make(map[string][]hostInfo)
 	for _, hi := range allHosts {
 		if hi.zone != "" {
@@ -119,7 +114,6 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 			continue
 		}
 
-		// Check deny ports — if empty, any open port is a violation
 		denyPorts := make(map[int]bool, len(rule.Ports))
 		denyAll := len(rule.Ports) == 0
 		for _, p := range rule.Ports {
@@ -128,7 +122,6 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 
 		var violators []ViolatorHost
 
-		// For each dest host, check if it has open ports that match denied ports
 		for _, dh := range destHosts {
 			for _, port := range dh.host.OpenPorts {
 				if denyAll || denyPorts[port] {
@@ -145,14 +138,12 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 
 		if len(violators) > 0 {
 			sev := "medium"
-			// Higher severity for safety zone violations or OT zone violations
 			for _, z := range pz {
 				if z.name == rule.DestZone && (z.purpose == "safety" || z.purpose == "ot") {
 					sev = "high"
 					break
 				}
 			}
-			// Safety violations are always critical
 			for _, z := range pz {
 				if (z.name == rule.SourceZone || z.name == rule.DestZone) && z.purpose == "safety" {
 					sev = "critical"
@@ -170,33 +161,69 @@ func AnalyzeGaps(policy Policy, report posture.PostureReport, zones []site.Zone,
 		}
 	}
 
-	// Enrich with Sentinel flow data if provided
-	if len(opts) > 0 && opts[0].FlowZonePorts != nil {
-		o := opts[0]
+	if len(opts) > 0 && len(opts[0].Flows) > 0 {
+		flowPorts, flowIdentities := indexFlows(opts[0].Flows, zones)
 		for i := range violations {
 			v := &violations[i]
-			// Count active flows matching this violation's zone pair and ports
 			totalFlows := 0
 			for _, vh := range v.Violators {
 				key := fmt.Sprintf("%s|%s|%d", v.Rule.SourceZone, v.Rule.DestZone, vh.Port)
-				totalFlows += o.FlowZonePorts[key]
+				totalFlows += flowPorts[key]
 			}
 			if totalFlows > 0 {
 				v.ActiveFlows = totalFlows
-				// Severity escalation: active traffic on denied paths is worse
-				if v.Severity == "medium" {
+				switch v.Severity {
+				case "medium":
 					v.Severity = "high"
-				} else if v.Severity == "high" {
+				case "high":
 					v.Severity = "critical"
 				}
 			}
-			// Add identity info
 			zoneKey := fmt.Sprintf("%s|%s", v.Rule.SourceZone, v.Rule.DestZone)
-			if ids, ok := o.FlowZoneIdentities[zoneKey]; ok {
+			if ids, ok := flowIdentities[zoneKey]; ok {
 				v.FlowIdentities = ids
 			}
 		}
 	}
 
 	return violations
+}
+
+// indexFlows buckets flow records into two maps that AnalyzeGaps uses for
+// enrichment: (srcZone|dstZone|port) → total connection count, and
+// (srcZone|dstZone) → identity info collected from flow enrichment.
+func indexFlows(flows []flow.FlowRecord, zones []site.Zone) (map[string]int, map[string][]FlowIdentity) {
+	idx := flow.BuildZoneIndex(zones)
+	ports := make(map[string]int)
+	identities := make(map[string][]FlowIdentity)
+
+	for _, f := range flows {
+		srcZone := f.SourceZone
+		if srcZone == "" {
+			srcZone = idx.Resolve(f.SourceAddr)
+		}
+		dstZone := f.DestZone
+		if dstZone == "" {
+			dstZone = idx.Resolve(f.DestAddr)
+		}
+		if srcZone == "" || dstZone == "" {
+			continue
+		}
+
+		ports[fmt.Sprintf("%s|%s|%d", srcZone, dstZone, f.DestPort)] += f.ConnectionCount
+
+		userName := f.Enrichment["UserName"]
+		department := f.Enrichment["Department"]
+		if userName == "" && department == "" {
+			continue
+		}
+		zoneKey := fmt.Sprintf("%s|%s", srcZone, dstZone)
+		identities[zoneKey] = append(identities[zoneKey], FlowIdentity{
+			UserName:   userName,
+			Department: department,
+			FlowCount:  f.ConnectionCount,
+		})
+	}
+
+	return ports, identities
 }
