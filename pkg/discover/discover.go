@@ -210,10 +210,10 @@ func runHaas(opts Opts, ips []string) ([]inventory.Device, error) {
 
 func runFanuc(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Fanuc FTP-banner discovery on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Fanuc multi-probe discovery (CIP / FTP / HTTP) on %d hosts...", len(ips)))
 	}
 
-	devices := discoverFanucFTP(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+	devices := discoverFanuc(ips, opts.Timeout, opts.Concurrency, opts.Progress)
 
 	if opts.Progress != nil {
 		opts.Progress(fmt.Sprintf("Fanuc discovery found %d devices", len(devices)))

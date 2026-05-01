@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, sseStream } from "@/lib/api";
 import type { DiscoverJob } from "@/lib/types";
 
@@ -10,6 +11,17 @@ export function useDiscover() {
   const [result, setResult] = useState<DiscoverJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const qc = useQueryClient();
+
+  // The backend imports discovered devices into the asset store inside the
+  // discover handler (sse.go). After completion, invalidate every cached
+  // query that reads from that store so /assets and the Dashboard refresh
+  // without a manual reload.
+  const invalidateAfterScan = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["assets"] });
+    qc.invalidateQueries({ queryKey: ["asset-summary"] });
+    qc.invalidateQueries({ queryKey: ["discover-history"] });
+  }, [qc]);
 
   const start = useCallback(
     async (params: {
@@ -36,6 +48,7 @@ export function useDiscover() {
                 setResult(parsed);
                 setStatus(parsed.status === "error" ? "error" : "complete");
                 if (parsed.error) setError(parsed.error);
+                invalidateAfterScan();
                 return;
               }
             } catch {
@@ -49,6 +62,7 @@ export function useDiscover() {
               setResult(job);
               setStatus(job.status === "error" ? "error" : "complete");
               if (job.error) setError(job.error);
+              invalidateAfterScan();
             });
           },
         );
@@ -57,7 +71,7 @@ export function useDiscover() {
         setError(err instanceof Error ? err.message : "Discovery failed");
       }
     },
-    [],
+    [invalidateAfterScan],
   );
 
   const reset = useCallback(() => {

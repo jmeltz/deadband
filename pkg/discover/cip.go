@@ -40,7 +40,9 @@ type CIPIdentity struct {
 	State       uint8
 }
 
-// vendorNames maps CIP vendor IDs to canonical vendor names.
+// vendorNames maps CIP vendor IDs to canonical vendor names. Source: ODVA
+// EtherNet/IP Vendor ID registry. Used by both the generic CIP scan path and
+// vendor-specific probes (e.g. Fanuc treats VendorID 252 as a positive hit).
 var vendorNames = map[uint16]string{
 	1:   "Rockwell Automation",
 	2:   "Neles (Metso)",
@@ -48,10 +50,16 @@ var vendorNames = map[uint16]string{
 	40:  "ABB",
 	56:  "Molex",
 	90:  "Turck",
+	252: "Fanuc",
 	266: "Schneider Electric",
 	283: "Siemens",
 	671: "Honeywell",
 }
+
+// FanucCIPVendorID is Fanuc's ODVA EtherNet/IP Vendor ID. Used by the
+// Fanuc-specific probe to confirm a CIP responder is in fact a Fanuc
+// controller.
+const FanucCIPVendorID uint16 = 252
 
 // buildListIdentityRequest returns a 24-byte EIP ListIdentity request.
 func buildListIdentityRequest() []byte {
