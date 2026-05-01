@@ -209,6 +209,11 @@ func parseJSON(r io.Reader) ([]Device, error) {
 	return devices, nil
 }
 
+// parseFlat reads the legacy flat text inventory format.
+//
+// Deprecated as of v0.5: this format is frozen. New imports should use CSV or
+// JSON. Existing flat files continue to load, but no new fields or syntax
+// will be added to this parser.
 func parseFlat(r io.Reader) ([]Device, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {

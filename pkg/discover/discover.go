@@ -224,7 +224,7 @@ func runFanuc(opts Opts, ips []string) ([]inventory.Device, error) {
 
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet + FINS + SRTP + OPC UA + Haas + Fanuc) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + FINS + SRTP + OPC UA + Haas + Fanuc) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -236,7 +236,6 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	s7Ch := make(chan result, 1)
 	modbusCh := make(chan result, 1)
 	melsecCh := make(chan result, 1)
-	bacnetCh := make(chan result, 1)
 	finsCh := make(chan result, 1)
 	srtpCh := make(chan result, 1)
 	opcuaCh := make(chan result, 1)
@@ -258,10 +257,6 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	go func() {
 		d, e := runMELSEC(opts, ips)
 		melsecCh <- result{d, e}
-	}()
-	go func() {
-		d, e := runBACnet(opts, ips)
-		bacnetCh <- result{d, e}
 	}()
 	go func() {
 		d, e := runFINS(opts, ips)
@@ -288,7 +283,6 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	s7Result := <-s7Ch
 	modbusResult := <-modbusCh
 	melsecResult := <-melsecCh
-	bacnetResult := <-bacnetCh
 	finsResult := <-finsCh
 	srtpResult := <-srtpCh
 	opcuaResult := <-opcuaCh
@@ -311,11 +305,6 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		}
 	}
 	for _, d := range melsecResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range bacnetResult.devices {
 		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
 			seen[d.IP] = d
 		}
@@ -356,7 +345,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	}
 
 	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil {
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil {
 		return devices, cipResult.err
 	}
 

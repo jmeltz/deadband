@@ -59,13 +59,10 @@ export function DatabaseTab() {
     }
   };
 
-  const vendors = stats?.vendors || {};
-  const vendorList = Object.entries(vendors).sort(([, a], [, b]) => b - a);
-
   return (
     <div className="space-y-6">
-      {/* DB stats */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* DB status */}
+      <div className="grid grid-cols-2 gap-4">
         <StatCard
           label="Advisories"
           value={isLoading ? "—" : stats?.advisory_count ?? 0}
@@ -76,20 +73,16 @@ export function DatabaseTab() {
           value={stats ? relativeTime(stats.updated) : "—"}
           sub={stats ? formatDate(stats.updated) : undefined}
         />
-        <StatCard
-          label="Chronic (>6mo)"
-          value={isLoading ? "—" : stats?.chronic_count ?? 0}
-          sub="long-standing advisories"
-        />
       </div>
 
-      {/* Update section */}
+      {/* Update */}
       <Card>
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-heading text-sm font-semibold">Advisory Database</h3>
             <p className="text-xs text-db-muted mt-0.5">
-              Fetch latest advisories from CISA CSAF repository
+              Fetches the deadband-hosted snapshot when available, falls back
+              to per-file CISA CSAF.
             </p>
           </div>
           <Button onClick={startUpdate} disabled={updating} size="sm">
@@ -115,37 +108,12 @@ export function DatabaseTab() {
         )}
       </Card>
 
-      {/* Vendor coverage */}
-      <Card>
-        <h3 className="font-heading text-sm font-semibold mb-3">Vendor Coverage</h3>
-        {vendorList.length > 0 ? (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-db-border text-left">
-                <th className="py-2 text-xs font-medium text-db-muted">Vendor</th>
-                <th className="py-2 text-xs font-medium text-db-muted text-right">Advisories</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vendorList.map(([vendor, count]) => (
-                <tr key={vendor} className="border-b border-db-border/50 table-row-hover">
-                  <td className="py-2 text-xs text-db-text">{vendor}</td>
-                  <td className="py-2 text-xs text-db-muted text-right font-mono">{count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="text-xs text-db-muted">No vendor data available.</p>
-        )}
-      </Card>
-
       {/* About */}
       <Card>
         <h3 className="font-heading text-sm font-semibold mb-2">About</h3>
         <div className="space-y-1 text-xs text-db-muted">
           <p>
-            <span className="text-db-text font-medium">deadband</span> — ICS firmware vulnerability gap detector
+            <span className="text-db-text font-medium">deadband v0.5</span> — OT asset inventory & vulnerability scanner
           </p>
           <p>Read-only tool — no configuration changes or write operations on OT devices</p>
         </div>
