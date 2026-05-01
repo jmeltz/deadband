@@ -50,6 +50,7 @@ var vendorNames = map[uint16]string{
 	40:  "ABB",
 	56:  "Molex",
 	90:  "Turck",
+	246: "Yamazaki Mazak",
 	266: "Schneider Electric",
 	283: "Siemens",
 	591: "Fanuc",
@@ -61,6 +62,11 @@ var vendorNames = map[uint16]string{
 // "FANUC CORPORATION". Used by the Fanuc-specific probe to confirm a CIP
 // responder is in fact a Fanuc controller.
 const FanucCIPVendorID uint16 = 591
+
+// MazakCIPVendorID is Yamazaki Mazak Corporation's ODVA EtherNet/IP Vendor
+// ID per the ODVA registry. Used by the Mazak-specific probe to confirm a
+// CIP responder is a Mazak controller.
+const MazakCIPVendorID uint16 = 246
 
 // buildListIdentityRequest returns a 24-byte EIP ListIdentity request.
 func buildListIdentityRequest() []byte {

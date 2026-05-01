@@ -23,6 +23,7 @@ const (
 	ModeOPCUA      DiscoveryMode = "opcua"
 	ModeHaas       DiscoveryMode = "haas"
 	ModeFanuc      DiscoveryMode = "fanuc"
+	ModeMazak      DiscoveryMode = "mazak"
 	ModeAuto       DiscoveryMode = "auto"
 	ModeLegacyHTTP DiscoveryMode = "http"
 )
@@ -69,6 +70,8 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runHaas(opts, ips)
 	case ModeFanuc:
 		return runFanuc(opts, ips)
+	case ModeMazak:
+		return runMazak(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
 	default:
@@ -222,9 +225,23 @@ func runFanuc(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runMazak(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Mazak multi-probe discovery (CIP / MTConnect) on %d hosts...", len(ips)))
+	}
+
+	devices := discoverMazak(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Mazak discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + FINS + SRTP + OPC UA + Haas + Fanuc) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + FINS + SRTP + OPC UA + Haas + Fanuc + Mazak) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -241,6 +258,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	opcuaCh := make(chan result, 1)
 	haasCh := make(chan result, 1)
 	fanucCh := make(chan result, 1)
+	mazakCh := make(chan result, 1)
 
 	go func() {
 		d, e := runCIP(opts, ips)
@@ -278,6 +296,10 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		d, e := runFanuc(opts, ips)
 		fanucCh <- result{d, e}
 	}()
+	go func() {
+		d, e := runMazak(opts, ips)
+		mazakCh <- result{d, e}
+	}()
 
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
@@ -288,6 +310,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	opcuaResult := <-opcuaCh
 	haasResult := <-haasCh
 	fanucResult := <-fanucCh
+	mazakResult := <-mazakCh
 
 	// Merge results, deduplicate by IP (prefer result with non-empty Model)
 	seen := make(map[string]inventory.Device)
@@ -334,6 +357,11 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 			seen[d.IP] = d
 		}
 	}
+	for _, d := range mazakResult.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
 
 	devices := make([]inventory.Device, 0, len(seen))
 	for _, d := range seen {
@@ -345,7 +373,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	}
 
 	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil {
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil && mazakResult.err != nil {
 		return devices, cipResult.err
 	}
 
