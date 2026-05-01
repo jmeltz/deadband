@@ -43,6 +43,9 @@ export default function Dashboard() {
     readGettingStarted,
     () => false,
   );
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const dismissGettingStarted = () => {
     try {
       localStorage.setItem(GETTING_STARTED_KEY, "dismissed");
@@ -69,9 +72,6 @@ export default function Dashboard() {
   const lastJob = (history ?? [])[0];
   const showGettingStarted =
     !gettingStartedDismissed && summary && summary.total_assets === 0;
-
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
 
   const handleExportReport = async () => {
     setExporting(true);
