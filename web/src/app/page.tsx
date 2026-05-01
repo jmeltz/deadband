@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useDbStats } from "@/lib/hooks/useDbStats";
 import { useAdvisories } from "@/lib/hooks/useAdvisories";
 import { useEnrichmentStats } from "@/lib/hooks/useEnrichment";
@@ -8,8 +8,10 @@ import { useAssetSummary } from "@/lib/hooks/useAssetSummary";
 import { useDiscoverHistory } from "@/lib/hooks/useDiscoverHistory";
 import { usePosture } from "@/lib/hooks/usePosture";
 import { StatCard, Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
 import { CvssBadge } from "@/components/advisory/CvssBadge";
 import { formatDate, relativeTime, formatDateTime } from "@/lib/utils/format";
+import { api } from "@/lib/api";
 import Link from "next/link";
 
 const GETTING_STARTED_KEY = "deadband.gettingStarted";
@@ -68,6 +70,31 @@ export default function Dashboard() {
   const showGettingStarted =
     !gettingStartedDismissed && summary && summary.total_assets === 0;
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const handleExportReport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const { blob, filename } = await api.exportHTMLReport({});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const canExport = !!summary && summary.total_assets > 0;
+
   return (
     <div className="space-y-6 max-w-6xl">
       {/* Getting Started (empty state) */}
@@ -117,6 +144,18 @@ export default function Dashboard() {
             </button>
           </div>
         </Card>
+      )}
+
+      {/* Action bar */}
+      {canExport && (
+        <div className="flex items-center justify-end gap-3">
+          {exportError && (
+            <span className="text-[11px] text-status-critical font-mono">{exportError}</span>
+          )}
+          <Button size="sm" onClick={handleExportReport} disabled={exporting}>
+            {exporting ? "Exporting..." : "Export Report"}
+          </Button>
+        </div>
       )}
 
       {/* Row 1: Asset + Vuln stat cards */}

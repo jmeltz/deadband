@@ -81,6 +81,7 @@ func main() {
 		assetStorePath   string
 		serve           bool
 		serveAddr       string
+		siteName        string
 	)
 
 	flag.StringVar(&inventoryPath, "inventory", "", "Path to device inventory file (CSV, JSON, or flat)")
@@ -127,6 +128,9 @@ func main() {
 	// Server flags
 	flag.BoolVar(&serve, "serve", false, "Start the web UI and API server")
 	flag.StringVar(&serveAddr, "addr", ":8484", "Listen address for --serve (e.g. :8484)")
+
+	// Report flags
+	flag.StringVar(&siteName, "site-name", "", "Site name for HTML report cover (e.g. \"Acme Job Shop\")")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deadband [flags]\n\n")
@@ -181,7 +185,7 @@ func main() {
 		if autoSaveAssets {
 			saveDiscoveredAssets(devices, assetStorePath)
 		}
-		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath)
+		runCheckDevices(devices, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath, siteName)
 		return
 	}
 
@@ -196,7 +200,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath)
+	runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence, minCVSS, vendorFilter, dryRun, edb, prioritize, complianceFlag, saveBaseline, compareBaseline, baselinePath, autoSaveAssets, assetStorePath, siteName)
 }
 
 func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Duration, concurrency int, dryRun bool) []inventory.Device {
@@ -252,6 +256,7 @@ func runPCAP(args []string) {
 	prioritize := pcapFlags.Bool("prioritize", false, "Sort results by risk score")
 	skipEnrichment := pcapFlags.Bool("skip-enrichment", false, "Skip enrichment data")
 	complianceFlag := pcapFlags.String("compliance", "", "Include compliance mappings")
+	siteName := pcapFlags.String("site-name", "", "Site name for HTML report cover")
 	pcapFlags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deadband pcap <file.pcap> [flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Passive device extraction from pcap capture file.\n\n")
@@ -289,10 +294,10 @@ func runPCAP(args []string) {
 	}
 
 	// Run vulnerability check on extracted devices
-	runCheckDevices(result.Devices, *dbPath, *outputPath, *outFormat, *minConfidence, *minCVSS, *vendorFilter, edb, *prioritize, *complianceFlag, false, false, "", false, "")
+	runCheckDevices(result.Devices, *dbPath, *outputPath, *outFormat, *minConfidence, *minCVSS, *vendorFilter, edb, *prioritize, *complianceFlag, false, false, "", false, "", *siteName)
 }
 
-func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath string) {
+func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath, siteName string) {
 	db, err := advisory.LoadDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[deadband] Error: %v\n", err)
@@ -333,7 +338,7 @@ func runCheckDevices(devices []inventory.Device, dbPath, outputPath, outFormat, 
 
 	fmt.Println()
 
-	writerOpts := output.WriterOpts{}
+	writerOpts := output.WriterOpts{SiteName: siteName}
 	if complianceFlag != "" {
 		frameworks := strings.Split(complianceFlag, ",")
 		writerOpts.Compliance = compliance.ForFrameworks(frameworks)
@@ -530,7 +535,7 @@ func runDiff(basePath, comparePath, inputFormat, dbPath, outputPath, outFormat, 
 	}
 }
 
-func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath string) {
+func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConfidence string, minCVSS float64, vendorFilter string, dryRun bool, edb *enrichment.DB, prioritize bool, complianceFlag string, saveBase, compareBase bool, basePath string, saveAssets bool, assetStorePath, siteName string) {
 	cli.PrintBanner("deadband", cli.Version, "OT asset inventory & vulnerability scanner")
 
 	db, err := advisory.LoadDatabase(dbPath)
@@ -584,7 +589,7 @@ func runCheck(inventoryPath, inputFormat, dbPath, outputPath, outFormat, minConf
 
 	fmt.Println()
 
-	writerOpts := output.WriterOpts{}
+	writerOpts := output.WriterOpts{SiteName: siteName}
 	if complianceFlag != "" {
 		frameworks := strings.Split(complianceFlag, ",")
 		writerOpts.Compliance = compliance.ForFrameworks(frameworks)

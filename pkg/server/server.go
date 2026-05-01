@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/diff/upload", s.handleDiffUpload)
 	s.mux.HandleFunc("POST /api/update", s.handleUpdate)
 	s.mux.HandleFunc("GET /api/update/events", s.handleUpdateEvents)
+	s.mux.HandleFunc("POST /api/reports/html", s.handleExportReport)
 	s.mux.HandleFunc("GET /api/enrichment/stats", s.handleEnrichmentStats)
 	s.mux.HandleFunc("GET /api/compliance/mappings", handleComplianceMappings)
 	s.mux.HandleFunc("GET /api/baseline", s.handleGetBaseline)

@@ -21,6 +21,7 @@ type htmlWriter struct {
 	results    []matcher.Result
 	summary    Summary
 	compliance []compliance.ControlMapping
+	siteName   string
 }
 
 func newHTMLWriter(w io.Writer) *htmlWriter {
@@ -72,6 +73,7 @@ func (hw *htmlWriter) Flush() error {
 		Summary:        hw.summary,
 		Version:        cli.Version,
 		Compliance:     hw.compliance,
+		SiteName:       hw.siteName,
 	}
 
 	// Compute top risk items
@@ -115,6 +117,7 @@ type htmlData struct {
 	TopRisks       []topRisk
 	Version        string
 	Compliance     []compliance.ControlMapping
+	SiteName       string
 }
 
 type topRisk struct {
@@ -208,6 +211,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-sans);
 h1 { font-size: 1.5rem; color: var(--teal-light); margin-bottom: 0.25rem; }
 h2 { font-size: 1.1rem; color: var(--text); margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
 h3 { font-size: 0.95rem; color: var(--text); margin-bottom: 0.5rem; }
+.site-name { font-size: 1.05rem; color: var(--text); font-family: var(--font-sans); margin-bottom: 0.25rem; letter-spacing: 0.02em; }
 .meta { font-size: 0.75rem; color: var(--muted); font-family: var(--font-mono); margin-bottom: 2rem; }
 section { background: var(--surface); border: 1px solid var(--border); padding: 1.5rem; margin-bottom: 1.5rem; }
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
@@ -256,12 +260,49 @@ tr:hover { background: rgba(26, 188, 156, 0.03); }
 footer { text-align: center; font-size: 0.7rem; color: var(--muted); padding: 2rem 0 1rem; border-top: 1px solid var(--border); margin-top: 2rem; }
 a { color: var(--info); text-decoration: none; }
 a:hover { color: var(--teal-light); }
-@media print { body { background: #fff; color: #111; } section { border-color: #ccc; } .bar-critical { background: #c0392b; } }
+@media print {
+  @page { margin: 0.6in; }
+  body { background: #fff; color: #111; padding: 0; max-width: none; font-size: 11pt; }
+  h1 { color: #0a6051; }
+  h2 { color: #111; border-bottom-color: #999; page-break-after: avoid; }
+  h3 { color: #111; page-break-after: avoid; }
+  section { background: #fff; border-color: #999; padding: 0.75rem 0; margin-bottom: 1rem; page-break-inside: avoid; }
+  .meta { color: #555; }
+  .site-name { color: #111; }
+  .stat { background: #fff; border-color: #999; }
+  .stat .value { color: #111; }
+  .stat.critical .value { color: #c0392b; }
+  .stat.high .value { color: #b35418; }
+  .stat.medium .value { color: #b87708; }
+  .stat.ok .value { color: #1e7a44; }
+  td { border-bottom-color: #ccc; color: #111; }
+  th { color: #555; border-bottom-color: #999; }
+  tr:hover { background: transparent; }
+  .badge { border-color: #999 !important; }
+  .badge-vulnerable, .badge-kev, .badge-risk-critical { color: #c0392b; background: #fff; }
+  .badge-potential, .badge-risk-medium { color: #b87708; background: #fff; }
+  .badge-ok, .badge-risk-low { color: #1e7a44; background: #fff; }
+  .badge-risk-high { color: #b35418; background: #fff; }
+  .advisory-row { background: #fff; border-color: #999; page-break-inside: avoid; }
+  .advisory-title { color: #111; }
+  .advisory-cves { color: #555; }
+  .advisory-url, a { color: #1456a3; text-decoration: underline; }
+  .advisory-url[href]:after { content: " (" attr(href) ")"; font-size: 0.7em; color: #555; }
+  .remediation { background: #f5f5f5; border-left-color: #0a6051; }
+  .top-risk-item { background: #fff; border-color: #999; page-break-inside: avoid; }
+  .device-finding { page-break-inside: avoid; border-bottom-color: #ccc; }
+  .bar-critical { background: #c0392b; }
+  .bar-medium { background: #b87708; }
+  .bar-ok { background: #1e7a44; }
+  .bar-none { background: #ddd; }
+  footer { border-top-color: #999; color: #555; }
+}
 </style>
 </head>
 <body>
 
 <h1>deadband Vulnerability Report</h1>
+{{if .SiteName}}<div class="site-name">{{.SiteName}}</div>{{end}}
 <div class="meta">Generated: {{.CheckedAt}} &middot; Advisory DB: {{.DBSource}} ({{.AdvisoryCount}} advisories, updated {{.DBUpdated}}) &middot; {{.DevicesChecked}} devices checked</div>
 
 <section>
@@ -329,8 +370,8 @@ a:hover { color: var(--teal-light); }
     <span style="font-family:var(--font-mono);color:var(--info)">{{.Advisory.ID}}</span>
     <span class="cvss cvss-{{cvssClass .Advisory.CVSSv3Max}}">CVSS {{printf "%.1f" .Advisory.CVSSv3Max}}</span>
     {{if .KEV}}<span class="badge badge-kev">KEV{{if .KEVRansomware}} + Ransomware{{end}}</span>{{end}}
-    {{if gt .RiskScore 0}}<span class="badge badge-risk-{{riskClass .RiskScore}}">Risk: {{printf "%.0f" .RiskScore}}</span>{{end}}
-    {{if gt .EPSSScore 0}}<span style="font-size:0.75rem;color:var(--muted)">EPSS: {{epssPercent .EPSSScore}}</span>{{end}}
+    {{if gt .RiskScore 0.0}}<span class="badge badge-risk-{{riskClass .RiskScore}}">Risk: {{printf "%.0f" .RiskScore}}</span>{{end}}
+    {{if gt .EPSSScore 0.0}}<span style="font-size:0.75rem;color:var(--muted)">EPSS: {{epssPercent .EPSSScore}}</span>{{end}}
   </div>
   <div class="advisory-title">{{.Advisory.Title}}</div>
   <div class="advisory-cves">{{joinCVEs .Advisory.CVEs}}</div>

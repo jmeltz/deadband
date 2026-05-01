@@ -217,6 +217,28 @@ export const api = {
   assetExportUrl: (format: "csv" | "json" | "dbd" = "csv") =>
     `${BASE_URL}/api/assets/export?format=${format}`,
 
+  exportHTMLReport: async (body: {
+    site_name?: string;
+    site?: string;
+    zone?: string;
+    ids?: string[];
+    compliance?: string[];
+  }): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${BASE_URL}/api/reports/html`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({ error: res.statusText }));
+      throw new ApiError(res.status, errBody.error || res.statusText);
+    }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(disposition);
+    const filename = m ? m[1] : "deadband-report.html";
+    return { blob: await res.blob(), filename };
+  },
+
   importDBD: async (file: File) => {
     const res = await fetch(`${BASE_URL}/api/assets/import/dbd`, {
       method: "POST",

@@ -27,6 +27,8 @@ type ResultWriter interface {
 // WriterOpts configures optional features for output writers.
 type WriterOpts struct {
 	Compliance []compliance.ControlMapping
+	// SiteName labels the report cover. Empty means no site context.
+	SiteName string
 }
 
 func NewWriter(w io.Writer, format string) (ResultWriter, error) {
@@ -46,6 +48,7 @@ func NewWriterWithOpts(w io.Writer, format string, opts WriterOpts) (ResultWrite
 	case "html":
 		hw := newHTMLWriter(w)
 		hw.compliance = opts.Compliance
+		hw.siteName = opts.SiteName
 		return hw, nil
 	case "sarif":
 		return newSARIFWriter(w), nil
