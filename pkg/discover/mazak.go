@@ -26,6 +26,7 @@
 package discover
 
 import (
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -59,6 +60,21 @@ var mazakMTConnectPorts = []int{5000, 5001}
 // `<Device model="...">` attributes and in CIP ProductName strings.
 var mazakModelRE = regexp.MustCompile(
 	`(?i)\b(Integrex|QuickTurn|QTN|Nexus|HCN|VCN|Variaxis|Multiplex|Smooth)\b[\w\- ]*`,
+)
+
+// mazakHostnameRE matches Mazak-pattern NetBIOS hostnames as set by Mazak
+// integrators at commissioning. Discriminator words (mazatrol, integrex,
+// smoothx, variaxis, multiplex, quickturn) are essentially Mazak-only —
+// generic terms like "smooth" alone are NOT in this list.
+var mazakHostnameRE = regexp.MustCompile(
+	`(?i)\b(mazak|mazatrol|integrex|smoothx|smoothg|smoothai|nexus|qtn|quickturn|variaxis|multiplex|smartbox)\b`,
+)
+
+// mazakHTTPRE matches Mazak strings inside an HTTP / response body. Used
+// when the controller's IIS-on-Smooth serves a branded operator/monitor
+// page instead of the bare iisstart welcome.
+var mazakHTTPRE = regexp.MustCompile(
+	`(?i)\b(mazak|mazatrol|smoothmonitor|smoothx|smoothg|smoothai|integrex|nexus|variaxis|multiplex|quickturn)\b`,
 )
 
 // MazakCIP probes UDP/44818 with EtherNet/IP ListIdentity. Returns nil, nil
@@ -159,15 +175,213 @@ func MazakMTConnect(ip string, port int, timeout time.Duration) (*MazakIdentity,
 	return nil, nil
 }
 
-// MazakProbe runs CIP + MTConnect (default port set) concurrently against
-// ip with CIP > MTConnect precedence. Verbose progress callback (when
-// non-nil) reports per-probe outcomes for `--mode mazak` operators.
+// NetBIOSPort is UDP/137, the NetBIOS Name Service port.
+const NetBIOSPort = 137
+
+// buildNBSTATRequest constructs a 50-byte NetBIOS Name Service node-status
+// request packet (NBSTAT). Targets the wildcard NetBIOS name "*" so the
+// responder enumerates every name registered on the host. Mirrors the
+// `nbtscan` / `nmblookup -A` workflow.
+func buildNBSTATRequest() []byte {
+	buf := make([]byte, 50)
+	// Transaction ID — fixed; we only send one request per host so the ID
+	// just needs to round-trip in the response header.
+	buf[0] = 0xAA
+	buf[1] = 0xBB
+	// Flags = 0x0000 (standard query, opcode 0)
+	binary.BigEndian.PutUint16(buf[4:6], 1) // questions = 1
+	// Answer/Authority/Additional RR counts left zero
+	buf[12] = 0x20 // encoded name length (32 bytes, fixed for NetBIOS)
+	// Encoded name "*\x00\x00..." (16-byte unencoded → 32-byte encoded).
+	// '*' is 0x2A → high nibble 2 → 'C' (0x43), low nibble A → 'K' (0x4B).
+	// All subsequent NULs → 'A' 'A'.
+	buf[13] = 'C'
+	buf[14] = 'K'
+	for i := 15; i < 13+32; i++ {
+		buf[i] = 'A'
+	}
+	buf[45] = 0x00 // name terminator
+	// Question type NBSTAT = 0x0021
+	binary.BigEndian.PutUint16(buf[46:48], 0x0021)
+	// Question class IN = 0x0001
+	binary.BigEndian.PutUint16(buf[48:50], 0x0001)
+	return buf
+}
+
+// parseNBSTATResponse extracts the 15-character NetBIOS names from an
+// NBSTAT response packet. Returns nil on any parse failure rather than
+// trying to recover — malformed responses are not informative for
+// fingerprinting.
+//
+// Layout (RFC 1002 § 4.2.18):
+//
+//	0..11   header (12 bytes)
+//	12..    question section: 1 byte len + 32 bytes name + 1 byte term + 4 bytes type/class = 38 bytes
+//	50..    answer RR: 34 bytes name (1 + 32 + 1) + 10 bytes type/class/TTL/RDLEN = 44 bytes
+//	94..    RDATA: 1 byte name count, then N×18 bytes (15 name + 1 suffix + 2 flags)
+func parseNBSTATResponse(data []byte) []string {
+	const rdataStart = 12 + 38 + 44
+	if len(data) < rdataStart+1 {
+		return nil
+	}
+	// Sanity: header flags should have the response bit set (0x8000).
+	flags := binary.BigEndian.Uint16(data[2:4])
+	if flags&0x8000 == 0 {
+		return nil
+	}
+	// Sanity: at least one answer RR.
+	if binary.BigEndian.Uint16(data[6:8]) == 0 {
+		return nil
+	}
+
+	count := int(data[rdataStart])
+	offset := rdataStart + 1
+	names := make([]string, 0, count)
+	for i := 0; i < count && offset+18 <= len(data); i++ {
+		raw := data[offset : offset+15]
+		name := strings.TrimRight(string(raw), " \x00")
+		// suffix at offset+15 indicates the name's purpose; we don't
+		// distinguish workstation vs server suffixes for fingerprinting,
+		// just collect every printable name.
+		if name != "" && isPrintableASCII(name) {
+			names = append(names, name)
+		}
+		offset += 18
+	}
+	return names
+}
+
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
+// MazakNetBIOS sends an NBSTAT query to UDP/137 and reports a Mazak
+// identity if any returned NetBIOS name matches the Mazak hostname regex.
+// Returns nil, nil on no response, parse failure, or non-Mazak hostnames.
+//
+// Read-only by construction: we only send the standard NBSTAT wildcard
+// query, no name registration or release. Many Mazak Smooth controllers
+// have NetBIOS enabled by default; Windows 10/11 disables it on Public
+// network profiles, so the probe is best-effort.
+func MazakNetBIOS(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", NetBIOSPort))
+	conn, err := net.DialTimeout("udp", addr, timeout)
+	if err != nil {
+		return nil, nil
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(buildNBSTATRequest()); err != nil {
+		return nil, nil
+	}
+
+	buf := make([]byte, 1500)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, nil
+	}
+
+	names := parseNBSTATResponse(buf[:n])
+	for _, name := range names {
+		if mazakHostnameRE.MatchString(name) {
+			return &MazakIdentity{
+				Model:  name,
+				Banner: fmt.Sprintf("NetBIOS hostname=%s", name),
+				Source: "netbios",
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+// MazakHTTP fetches GET / over plain HTTP and reports a Mazak identity if
+// the response body or Server header carry Mazak-specific strings.
+// Lower-confidence than CIP / MTConnect / NetBIOS — bare IIS welcomes
+// don't carry Mazak text — but it's the right fallback when the
+// connectivity options aren't enabled and NetBIOS is firewalled.
+func MazakHTTP(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/", net.JoinHostPort(ip, "80")), nil)
+	if err != nil {
+		return nil, nil
+	}
+	req.Header.Set("User-Agent", "deadband/0.5")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil && len(body) == 0 {
+		return nil, nil
+	}
+	bodyStr := string(body)
+	server := resp.Header.Get("Server")
+
+	matched := mazakHTTPRE.MatchString(bodyStr) || mazakHTTPRE.MatchString(server)
+	if !matched {
+		return nil, nil
+	}
+
+	id := &MazakIdentity{
+		Banner: fmt.Sprintf("HTTP %s server=%q — %s", resp.Status, server, firstLineMazak(bodyStr)),
+		Source: "http",
+	}
+	if m := mazakModelRE.FindString(bodyStr); m != "" {
+		id.Model = strings.TrimSpace(m)
+	}
+	return id, nil
+}
+
+func firstLineMazak(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 120 {
+			line = line[:120] + "..."
+		}
+		return line
+	}
+	return ""
+}
+
+// MazakProbe runs all four Mazak fingerprints concurrently against ip and
+// returns the first positive hit, with this precedence:
+//
+//	CIP (vendor=246) > NetBIOS (hostname pattern) > MTConnect (manufacturer=Mazak) > HTTP (body match)
+//
+// CIP wins because vendor ID is canonical. MTConnect outranks NetBIOS in
+// product code structure, but we put NetBIOS second here because in
+// practice an i-400S with no MTConnect option exposes nothing on TCP/5000
+// while still emitting a Mazak-pattern NetBIOS name. HTTP is the
+// lowest-confidence fallback for shops with NetBIOS firewalled and
+// branded IIS pages.
+//
+// Verbose callback (when non-nil) reports per-probe outcomes for
+// `--mode mazak` operators on a single host.
 func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakIdentity {
 	var (
-		mu    sync.Mutex
-		cipID *MazakIdentity
-		mtIDs []*MazakIdentity
-		wg    sync.WaitGroup
+		mu       sync.Mutex
+		cipID    *MazakIdentity
+		nbID     *MazakIdentity
+		httpID   *MazakIdentity
+		mtIDs    []*MazakIdentity
+		wg       sync.WaitGroup
 	)
 
 	wg.Add(1)
@@ -182,6 +396,38 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 				verbose(fmt.Sprintf("Mazak CIP probe (%s:%d): no Mazak identity", ip, EIPPort))
 			} else {
 				verbose(fmt.Sprintf("Mazak CIP probe (%s:%d): %s", ip, EIPPort, id.Banner))
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakNetBIOS(ip, timeout)
+		mu.Lock()
+		nbID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak NetBIOS probe (%s:%d): no Mazak-pattern hostname", ip, NetBIOSPort))
+			} else {
+				verbose(fmt.Sprintf("Mazak NetBIOS probe (%s:%d): %s", ip, NetBIOSPort, id.Banner))
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakHTTP(ip, timeout)
+		mu.Lock()
+		httpID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak HTTP probe (%s:80): no Mazak strings in /", ip))
+			} else {
+				verbose(fmt.Sprintf("Mazak HTTP probe (%s:80): %s", ip, id.Banner))
 			}
 		}
 	}()
@@ -206,13 +452,19 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 	}
 	wg.Wait()
 
-	if cipID != nil {
+	switch {
+	case cipID != nil:
 		return cipID
+	case nbID != nil:
+		return nbID
 	}
 	for _, id := range mtIDs {
 		if id != nil {
 			return id
 		}
+	}
+	if httpID != nil {
+		return httpID
 	}
 	return nil
 }
@@ -242,6 +494,10 @@ func mazakPortFor(id *MazakIdentity) int {
 	switch id.Source {
 	case "cip":
 		return EIPPort
+	case "netbios":
+		return NetBIOSPort
+	case "http":
+		return 80
 	case "mtconnect":
 		if id.AgentPort != 0 {
 			return id.AgentPort
@@ -255,8 +511,8 @@ func mazakPortFor(id *MazakIdentity) int {
 // discoverMazak runs MazakProbe over a slice of IPs concurrently.
 func discoverMazak(ips []string, timeout time.Duration, concurrency int, progress func(string)) []inventory.Device {
 	if progress != nil {
-		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, MTConnect/TCP %v",
-			len(ips), EIPPort, mazakMTConnectPorts))
+		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, MTConnect/TCP %v, HTTP/TCP 80",
+			len(ips), EIPPort, NetBIOSPort, mazakMTConnectPorts))
 	}
 
 	verbose := func(s string) {}
