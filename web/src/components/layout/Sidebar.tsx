@@ -1,63 +1,28 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils/cn";
-import { api } from "@/lib/api";
 
-type LinkItem = {
-  kind: "link";
+type NavItem = {
   href: string;
   label: string;
   icon: (p: { className?: string }) => React.ReactElement;
 };
 
-type ActionItem = {
-  kind: "action";
-  label: string;
-  icon: (p: { className?: string }) => React.ReactElement;
-  onClick: () => void | Promise<void>;
-  pending?: boolean;
-};
+// v0.5 nav: Dashboard, Scan, Assets, Report, Settings. Other surfaces
+// (sites, acl, posture, advisories) are reachable via direct URL but
+// hidden from the sidebar pending the enterprise-pivot decision.
+const nav: NavItem[] = [
+  { href: "/", label: "Dashboard", icon: DashboardIcon },
+  { href: "/scan", label: "Scan", icon: ScanIcon },
+  { href: "/assets", label: "Assets", icon: AssetsIcon },
+  { href: "/report", label: "Report", icon: ReportIcon },
+  { href: "/settings", label: "Settings", icon: SettingsIcon },
+];
 
-type NavItem = LinkItem | ActionItem;
-
-// v0.5 nav: Dashboard, Scan, Report (action — triggers HTML download),
-// Settings. Other surfaces (assets, sites, acl, posture, advisories) are
-// reachable via direct URL but hidden from the sidebar pending the
-// enterprise-pivot decision.
 export function Sidebar() {
   const pathname = usePathname();
-  const [exporting, setExporting] = useState(false);
-
-  const handleReport = async () => {
-    if (exporting) return;
-    setExporting(true);
-    try {
-      const { blob, filename } = await api.exportHTMLReport({});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch {
-      // surfaced on the Dashboard's Export button; quiet here
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const nav: NavItem[] = [
-    { kind: "link", href: "/", label: "Dashboard", icon: DashboardIcon },
-    { kind: "link", href: "/scan", label: "Scan", icon: ScanIcon },
-    { kind: "link", href: "/assets", label: "Assets", icon: AssetsIcon },
-    { kind: "action", label: "Report", icon: ReportIcon, onClick: handleReport, pending: exporting },
-    { kind: "link", href: "/settings", label: "Settings", icon: SettingsIcon },
-  ];
 
   return (
     <aside className="w-56 shrink-0 border-r border-db-border bg-db-bg flex flex-col">
@@ -76,30 +41,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 px-2 py-3 space-y-0.5">
-        {nav.map((item) => {
-          if (item.kind === "action") {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.label}
-                onClick={item.onClick}
-                disabled={item.pending}
-                className={cn(
-                  "w-full flex items-center gap-2.5 px-3 py-2 rounded-sm text-sm transition-colors",
-                  "text-db-muted hover:text-db-text hover:bg-db-surface",
-                  item.pending && "opacity-60",
-                )}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.pending && (
-                  <span className="text-[10px] text-db-muted">…</span>
-                )}
-              </button>
-            );
-          }
-
-          const { href, label, icon: Icon } = item;
+        {nav.map(({ href, label, icon: Icon }) => {
           const active =
             href === "/" ? pathname === "/" : pathname.startsWith(href);
           return (
