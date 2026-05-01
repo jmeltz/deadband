@@ -1,404 +1,250 @@
 # deadband
 
-**Offline OT asset inventory, vulnerability matching, and network posture analysis** — Release 0.30
+**Read-only OT vulnerability scanning and reporting for mid-market manufacturers.**
 
-deadband discovers industrial devices on your network, cross-references firmware versions against 3,600+ CISA ICS advisories, and analyzes network posture (segmentation, ACL gaps, IT/OT boundary) — all from a single Go binary with an optional embedded web UI.
+deadband discovers industrial controllers on a network, fingerprints their firmware, and matches them against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed (3,600+ advisories). It produces a self-contained HTML report you can hand to a customer at the end of an engagement. No agent, no cloud, no telemetry, no writes to OT devices.
 
-It actively scans for Rockwell Automation (CIP/EIP), Siemens (S7comm), Schneider Electric / ABB / Delta (Modbus TCP), Mitsubishi Electric (MELSEC/SLMP), Omron (FINS), BACnet/IP (Trane, Honeywell, Johnson Controls), Emerson/GE (SRTP), and OPC UA. It also passively extracts devices from pcap captures and accepts pre-collected inventory files (CSV/JSON).
+v0.5 focuses on the job-shop / CNC market — sites that are too small for Dragos, Claroty, or Nozomi but now face CMMC 2.0 pressure. New in this release: **Haas Q-command** discovery, **Fanuc FTP-banner** fingerprinting, a polished HTML report, and a snapshot-based advisory updater that survives shop-floor egress filtering.
 
-## Why
+## Why deadband
 
-No lightweight, offline-capable tool accepts "here are my PLCs and their firmware versions" and outputs "here are the open CVEs against them, mapped to IEC 62443 controls, enriched with CISA KEV / EPSS, and a posture report showing segmentation gaps." deadband does it in a terminal or browser, with no agent or sensor.
+There is no lightweight, offline-capable tool that says "here are the open CVEs against your machine tools" without a six-figure platform contract. deadband does it from a terminal, in a browser, or as a one-shot HTML deliverable, with full air-gap support and zero phone-home behavior.
 
 ## Safety
 
-- **Read-only by construction** — discovery uses identity reads and port probes only (no CIP writes, no S7 writes, no ACL pushes)
-- **Sensitivity-ordered posture scanning** — hosts identified as OT are excluded from IT port scans, SMB probes, and banner grabs (see `pkg/posture/doc.go`)
-- **No runtime internet calls** — advisory, KEV, and EPSS data are fetched/cached ahead of time
-- **Transparent** — prints a safety banner on startup, uses only public CISA/first.org data
-- **Scriptable** — structured output, meaningful exit codes
+- **Read-only by construction.** Every probe issues only documented identification reads or banner grabs. Unit tests assert no unexpected bytes are written to fixture servers.
+- **No external runtime calls.** Advisory data is fetched/cached separately via `--update`. The check pipeline runs offline.
+- **No writes, no auth, no credential storage.** Refuses to log into anything.
+- **Transparent.** Prints a safety banner at every entry point. Uses only public CISA data (TLP:WHITE).
 
 ## Quick Start
 
 ```bash
-# Build (CLI only)
+# Build
 make deadband
 
-# Build with embedded web UI
-make deadband-web
-
-# Fetch advisory + enrichment database (one-time, requires internet)
+# Fetch advisory database (one-time)
 bin/deadband --update
 
-# Discover and check (auto mode: all 8 OT protocols in parallel)
+# Auto-discover everything (CIP + S7 + Modbus + MELSEC + FINS + SRTP + OPC UA + Haas + Fanuc)
 bin/deadband --cidr 10.0.1.0/24
 
-# Target a single protocol
-bin/deadband --cidr 10.0.1.0/24 --mode s7
-bin/deadband --cidr 10.0.1.0/24 --mode modbus
+# CNC-only modes (new in v0.5)
+bin/deadband --cidr 10.0.1.0/24 --mode haas    # Haas NGC, TCP/5051
+bin/deadband --cidr 10.0.1.0/24 --mode fanuc   # Fanuc FTP banner, TCP/21
+
+# Existing PLC modes
+bin/deadband --cidr 10.0.1.0/24 --mode cip     # Rockwell EtherNet/IP
+bin/deadband --cidr 10.0.1.0/24 --mode s7      # Siemens S7comm
+bin/deadband --cidr 10.0.1.0/24 --mode modbus  # Schneider, ABB, Delta, Moxa, etc.
+bin/deadband --cidr 10.0.1.0/24 --mode melsec  # Mitsubishi
+bin/deadband --cidr 10.0.1.0/24 --mode fins    # Omron
+bin/deadband --cidr 10.0.1.0/24 --mode srtp    # Emerson/GE PACSystems
 
 # Check a pre-collected inventory file
-bin/deadband --inventory devices.csv
+bin/deadband -i devices.csv --min-cvss 7.0 --prioritize
 
-# Passive extraction from pcap
-bin/deadband pcap capture.pcap
+# Generate a client-deliverable HTML report
+bin/deadband -i devices.csv \
+  --site-name "Acme Job Shop" \
+  --out-format html -o acme-report.html
 
-# Start the web UI + API
-bin/deadband serve           # http://localhost:8484
-
-# JSON/HTML/SARIF output with filters, compliance mappings, risk prioritization
-bin/deadband -i devices.json \
-  --min-cvss 7.0 --prioritize \
-  --compliance iec62443,nist-csf \
-  --out-format sarif -o report.sarif
+# Fail CI if any HIGH-confidence vulns are found
+bin/deadband -i devices.csv --min-confidence high
+echo $?  # 1 = found, 0 = clean, 2 = error
 ```
+
+## HTML Report (the deliverable)
+
+The `--out-format html` writer produces a single-file, self-contained report — no CDN, no external fonts, no remote stylesheets. Hand it to a customer; open it on an air-gapped laptop; print to PDF from any browser.
+
+What's in it:
+
+- **Cover** with site name (`--site-name`), generation timestamp, advisory DB version
+- **Executive summary** — counts of vulnerable / potential / OK / no-match with a stacked bar
+- **Top risk items** — KEV + CVSS + risk-score sorted, top 5
+- **Device assessment table** — one row per device with status badges
+- **Vulnerability details** — per-device advisories with CVSS, KEV/ransomware flags, CVEs, remediation links
+- **Compliance mapping** (optional, with `--compliance iec62443,nist-csf,nerc-cip`)
+- **Print stylesheet** — browser Print → Save as PDF produces a clean light-mode report
+
+A regression test in `pkg/output/html_test.go` enforces self-containedness — no external references can sneak into the template.
+
+## Web UI
+
+Run the bundled web app for an interactive flow:
+
+```bash
+make deadband-web
+bin/deadband serve
+# http://localhost:8484
+```
+
+Four panes, intentionally small:
+
+- **Dashboard** — exposure summary, site risk overview, top findings, **Export Report** button
+- **Scan** — kick off a discovery run against a CIDR (Haas / Fanuc / CIP / S7 / Modbus / etc.)
+- **Report** — sidebar action that downloads the HTML report
+- **Settings** — advisory DB status + Update Now
+
+For development with hot reload:
+
+```bash
+go run ./cmd/deadband serve   # API on :8484
+cd web && npm run dev          # Frontend with /api/* proxy
+```
+
+## Advisory Database
+
+`--update` fetches the latest CISA CSAF feed. Source resolution is layered:
+
+| `--source` value | Behavior |
+|---|---|
+| empty (default) | Fetch deadband.org snapshot, fall back to per-file CSAF on failure |
+| `github` | Force per-file fetch from `cisagov/CSAF` (slow, ~3,600 files) |
+| `https://...` | Fetch a specific snapshot URL with `.sha256` verification |
+| `/local/path/` | Use a local CSAF mirror (full air-gap) |
+
+The default snapshot path is fast (one HTTP request), survives corporate egress filtering, and gracefully falls back to per-file fetch when unreachable. Air-gapped sites point `--source` at a copied CSAF mirror.
+
+```bash
+# Fast default path
+bin/deadband --update
+
+# Force per-file (when snapshot is stale or you want fresh-from-source)
+bin/deadband --update --source github
+
+# Air-gapped
+scp ~/.deadband/advisories.json analyst@isolated:~/.deadband/
+# or
+bin/deadband --update --source ./local-csaf-mirror/
+```
+
+## Active Discovery Protocols
+
+All probes are read-only. None require authentication.
+
+| Protocol | Port | Vendors covered |
+|---|---|---|
+| **Haas Q-commands** | TCP 5051 | Haas Automation (NGC controllers) — *new in v0.5* |
+| **Fanuc FTP banner** | TCP 21 | Fanuc CNC + R-30iB robot controllers — *new in v0.5* |
+| CIP/EIP ListIdentity | UDP 44818 | Rockwell Automation |
+| S7comm SZL Read | TCP 102 | Siemens (S7-300/400/1200/1500) |
+| Modbus TCP Device ID | TCP 502 | Schneider, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton |
+| MELSEC/SLMP | TCP 5007 | Mitsubishi Electric (iQ-R/F, Q, L, FX5) |
+| FINS | UDP 9600 | Omron (CJ, CP, CS, NJ, NX) |
+| GE-SRTP | TCP 18245 | Emerson / GE (PACSystems, Series 90, VersaMax) |
+| OPC UA | TCP 4840 | Cross-vendor industrial servers |
+
+Auto mode (`--mode auto`, default) runs all of the above concurrently and merges results.
+
+**BACnet/IP** is available behind a build tag for users who specifically need building automation:
+
+```bash
+go build -tags bacnet ./cmd/deadband
+bin/deadband --mode bacnet --cidr 10.0.1.0/24
+```
+
+It was moved out of the default scope because it serves the building-automation market rather than manufacturing OT — different positioning, different buyers.
+
+**Fanuc FOCAS2** (TCP/8193) is stubbed pending live-device access. Banner-grab fingerprinting handles the common cases today.
 
 ## Input Formats
 
-**CSV** (default, matches `rockwell-discover` output):
+**CSV** (default):
 ```
 Scanned IP,Device Name,Ethernet Address (MAC),IP Address,Product Revision,Serial Number,Status,Uptime
 172.16.12.21,1756-EN2T/D,5C:88:16:C4:26:3C,172.16.12.21,11.002,D060925B,Run,"206 days, 03h:12m:20s"
 ```
 
-**JSON** (matches `rockwell-discover --format json`):
+**JSON**:
 ```json
-[{"scanned_ip":"172.16.12.21","device_name":"1756-EN2T/D","product_revision":"11.002",...}]
+[{"scanned_ip":"172.16.12.21","device_name":"1756-EN2T/D","product_revision":"11.002"}]
 ```
 
-**Flat text** (manual/ad-hoc):
+**Flat text** (frozen as of v0.5 — no further extensions):
 ```
 172.16.12.21,Rockwell,1756-EN2T,11.002
-172.16.12.22,ABB,AC500,3.4.1
+172.16.12.22,Haas,VF-2,100.21.000.1037
 ```
-
-## Output Formats
-
-| Format | Use case |
-|--------|----------|
-| `text` | Terminal, human review (default) |
-| `csv` | Spreadsheet import |
-| `json` | Scripting / pipeline integration |
-| `html` | Standalone shareable report |
-| `sarif` | CI/CD (GitHub Code Scanning, Azure DevOps) |
 
 ## Flags
 
 ### Discovery
-
 | Flag | Default | Description |
-|------|---------|-------------|
-| `--cidr` | | CIDR range to scan (e.g. `10.0.1.0/24`) |
-| `--mode` | `auto` | `auto`, `cip`, `s7`, `modbus`, `melsec`, `bacnet`, `fins`, `srtp`, `opcua`, `http` |
+|---|---|---|
+| `--cidr` | | CIDR range (e.g. `10.0.1.0/24`) |
+| `--mode` | `auto` | `auto`, `cip`, `s7`, `modbus`, `melsec`, `fins`, `srtp`, `opcua`, `haas`, `fanuc`, `http` (`bacnet` available with `-tags bacnet`) |
 | `--timeout` | `2s` | TCP/UDP scan timeout |
 | `--http-timeout` | `5s` | HTTP scrape timeout |
-| `--concurrency` | `50` | Concurrent scan workers |
+| `--concurrency` | `50` | Concurrent workers |
 
 ### Check
-
 | Flag | Default | Description |
-|------|---------|-------------|
+|---|---|---|
 | `--inventory` / `-i` | | Path to device inventory file |
-| `--compare` | | Second inventory file (diff mode) |
-| `--format` | `auto` | Input format: `csv`, `json`, `flat`, `auto` |
-| `--db` | `~/.deadband/advisories.json` | Path to advisory database |
+| `--format` | auto-detect | `csv`, `json`, `flat` |
+| `--db` | `~/.deadband/advisories.json` | Advisory database |
 | `--output` / `-o` | stdout | Output file path |
-| `--out-format` | `text` | `text`, `csv`, `json`, `html`, `sarif` |
+| `--out-format` | `text` | `text`, `csv`, `json`, **`html`**, `sarif` |
+| `--site-name` | | Site label for the HTML report cover |
 | `--min-confidence` | `low` | `low`, `medium`, `high` |
 | `--min-cvss` | `0.0` | Minimum CVSS v3 score |
-| `--vendor` | (all) | Filter to a specific vendor |
-| `--prioritize` | `false` | Sort results by risk (KEV > EPSS > CVSS) |
-| `--compliance` | | `iec62443`, `nist-csf`, `nerc-cip`, `all` (comma-separated) |
-| `--dry-run` | `false` | Parse only, emit counts |
-
-### Baseline & Asset Inventory
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--save-baseline` | `false` | Save current device list as baseline after scan |
-| `--compare-baseline` | `false` | Compare current scan against saved baseline |
-| `--baseline` | `~/.deadband/baseline.json` | Baseline file path |
-| `--auto-save-assets` | `false` | Auto-import discovered devices into asset inventory |
-| `--asset-store` | `~/.deadband/assets.json` | Asset inventory file path |
+| `--vendor` | | Filter to a specific vendor |
+| `--prioritize` | `false` | Sort by risk score (KEV + EPSS + CVSS) |
+| `--compliance` | | Include mappings: `iec62443,nist-csf,nerc-cip,all` |
 
 ### Update
-
 | Flag | Default | Description |
-|------|---------|-------------|
-| `--update` | | Fetch advisories + KEV + EPSS |
-| `--skip-enrichment` | `false` | Skip KEV/EPSS fetch during update |
-| `--since` | (all) | Only fetch after date (`YYYY-MM-DD`) |
-| `--source` | | Local CSAF mirror path (air-gapped) |
+|---|---|---|
+| `--update` | | Refresh advisory database |
+| `--source` | | empty / `github` / URL / local path (see above) |
+| `--since` | | Only fetch advisories after `YYYY-MM-DD` |
+| `--skip-enrichment` | `false` | Skip KEV/EPSS fetch |
 
 ### Server
-
 | Flag | Default | Description |
-|------|---------|-------------|
-| `--serve` | `false` | Start the web UI and API server |
+|---|---|---|
+| `--serve` | `false` | Start the web UI + API |
 | `--addr` | `:8484` | Listen address |
-
-The `serve` subcommand is also accepted (`deadband serve [--addr :8484] [--db <path>]`).
-
-### Other
-
-| Flag | Description |
-|------|-------------|
-| `--stats` | Show advisory DB metadata (counts, staleness, vendor coverage) |
 
 ## Exit Codes
 
 | Code | Meaning |
-|------|---------|
-| `0` | No vulnerabilities found |
+|---|---|
+| `0` | No vulnerabilities matched |
 | `1` | One or more matches found |
-| `2` | Error (missing DB, bad input, etc.) |
+| `2` | Error (missing DB, bad input, parse failure) |
 
 ## Confidence Levels
 
 | Level | Meaning |
-|-------|---------|
-| `HIGH` | Vendor + model exact match, firmware in advisory range (clean semver) |
-| `MEDIUM` | Vendor + model match, version comparison ambiguous |
-| `LOW` | Vendor match only, model is partial/wildcard match |
-
-## Enrichment
-
-On `--update`, deadband also fetches:
-
-- **CISA KEV** — Known Exploited Vulnerabilities catalog (flags CVEs with `ransomware_use`)
-- **FIRST EPSS** — Exploit Prediction Scoring System (probability of exploitation in next 30 days)
-
-Risk scoring combines these signals (KEV > EPSS > CVSS) so `--prioritize` surfaces the advisories that matter most. All enrichment data is cached alongside the advisory DB for offline use.
-
-## Compliance Mappings
-
-Results can be annotated with controls from three frameworks:
-
-| Framework | Controls mapped |
-|-----------|-----------------|
-| IEC 62443-3-3 | SR (System Requirements) and RE (Requirement Enhancements) |
-| NIST CSF 2.0 | ID, PR, DE, RS, RC functions |
-| NERC CIP | CIP-002 through CIP-013 |
-
-Pass `--compliance iec62443,nist-csf,nerc-cip` (or `all`) to include mappings in any output format. The web UI exposes the same mappings under **Posture → Frameworks**.
-
-## Air-Gap Support
-
-deadband works with zero internet at check-time. Run `--update` on a connected host, then copy the DB folder:
-
-```bash
-scp -r ~/.deadband/ assessor@isolated-host:~/
-ssh assessor@isolated-host "bin/deadband -i /tmp/devices.csv"
-```
-
-For fully air-gapped environments, point `--source` at a local CSAF mirror:
-
-```bash
-bin/deadband --update --source ./local-csaf-mirror/
-```
-
-## Web UI
-
-The embedded web UI is a Next.js static export served from the Go binary.
-
-```bash
-make deadband-web
-bin/deadband serve          # http://localhost:8484
-```
-
-The sidebar has five top-level areas:
-
-| Area | Contents |
-|------|----------|
-| **Dashboard** | Summary tiles, getting-started checklist (first run), recent discovery |
-| **Assets** | Tabs: Inventory, Discover, History, Compare (diff two snapshots) |
-| **Network** | Collapsible group: Sites (CIDR zones) and ACL Policies (zone-to-zone rules) |
-| **Posture** | Tabs: Findings (subnet posture), Frameworks (IEC 62443 / NIST CSF / NERC CIP) |
-| **Advisories** | Searchable advisory browser; row click opens a detail drawer |
-| **Settings** | Tabs: Database (advisory updates, stats), Integrations (Sentinel, ASA) |
-
-Advisory detail uses a URL-driven drawer (`/advisories?advisory=ICSA-XX-YYY-ZZ`), so deep links survive refresh and browser back.
-
-For frontend development:
-
-```bash
-# Terminal 1: API server
-go run ./cmd/deadband serve
-
-# Terminal 2: Next.js dev server (proxies /api/* to :8484)
-cd web && npm run dev
-```
-
-## Sites
-
-Sites define named network locations with CIDR subnets and optional zones (IT, DMZ, OT, Safety, etc.). When a site is defined, discovered or imported assets are automatically assigned based on IP matching.
-
-```bash
-# Create a site
-curl -X POST http://localhost:8484/api/sites \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Plant A","cidrs":["10.0.1.0/24","10.0.2.0/24"],"location":"Chicago, IL"}'
-
-# List sites
-curl http://localhost:8484/api/sites
-
-# Reassign all assets to sites based on CIDR matching
-curl -X POST http://localhost:8484/api/sites/reassign
-```
-
-Sites and zones are managed through the web UI's **Network → Sites** page or the HTTP API.
-
-## ACL Policies
-
-ACL policies define allow/deny rules between zones (e.g., `IT → OT` denied except TCP 44818 for CIP). deadband compares policies against observed ASA configuration or Sentinel flow data to surface gaps — rules that exist but have no matching traffic, or observed traffic that no rule allows.
-
-Managed at **Network → ACL Policies** in the web UI. Gap analysis is purely analytical — deadband never pushes rules to any device.
-
-## Posture Analysis
-
-The Posture page walks a subnet with a sensitivity-ordered scanner that protects OT controllers from any intrusive probing. See `pkg/posture/doc.go` for the full protocol; the short version:
-
-1. Pre-tag known OT hosts from the asset store
-2. Scan 8 OT ports on every host
-3. Scan 12 IT/network ports only on non-OT hosts
-4. Classify (OT / IT / Network / Unknown)
-5. SMB/NTLMSSP probe on Windows hosts (RDP open, non-OT)
-6. Protocol banner grabs (SSH, HTTP, SNMP, Telnet) on non-OT hosts only
-7. Presumption enrichment (no packets sent)
-
-Output surfaces subnet posture (host classes, unknowns), control recommendations (compensating controls per host class), and a risk simulation panel that models the impact of adding specific compensating controls.
-
-## Change Simulator
-
-The change simulator answers the question that gates a controls-engineer signoff: **"if I add, remove, or edit this rule, what newly breaks or newly opens?"** It evaluates a planned policy against current traffic plus posture-implied traffic and returns a three-bucket diff: newly denied, newly allowed, unchanged.
-
-Inputs:
-
-- A current policy baseline (selected by `policy_id`)
-- A planned policy (full rule set, server never persists it)
-- `flow_window`: `24h`, `7d` (default), or `30d`
-- Toggles: `include_observed` (Sentinel flows, default on), `include_implied` (synthesized from the latest posture scan, default on)
-
-**Observed flows** come from the site's Sentinel snapshot within the window. **Implied flows** are synthesized from posture: for each allow rule, deadband enumerates `(srcHost, dstHost, port)` tuples where `srcHost` is any posture-scanned host in the rule's source zone, `dstHost` has `port` open in the destination zone, and `port` matches the rule's port list. Zone pairs with more than 1,000 possible tuples collapse to a single representative record tagged `enrichment.collapsed=true`.
-
-Both flow sets feed a top-to-bottom rule-match evaluator that returns a `FlowVerdict` per flow (matched rule ID, action, human reason). The diff keys on `(src, dst, port, protocol)` and buckets by whether the verdict flipped.
-
-Use it from the web UI at `/acl` → **Plan Change** → edit the right pane's rules → **Simulate**. Rows in the result view are grouped by zone pair, badged `OBSERVED` or `IMPLIED`, and flagged when the destination zone is OT or safety-purposed. Click a row to see the full verdict and enrichment in a side drawer.
-
-Endpoint:
-
-```
-POST /api/acl/simulate
-{ site_id, policy_id, planned_policy, flow_window, include_observed, include_implied }
-→ { current: DiffSummary, planned: DiffSummary, diff: { newly_denied, newly_allowed, unchanged } }
-```
-
-Pluggable flow sources (Splunk, Elastic, Palo Alto, etc.) with a preview-driven column mapping UI are planned for 0.31 — see `INTEGRATIONS.md`.
-
-## Integrations
-
-deadband can ingest data from existing enterprise security tools to enrich its picture of the environment:
-
-| Integration | Purpose |
-|-------------|---------|
-| **Microsoft Sentinel** (Azure Log Analytics) | Pull flow telemetry to validate ACL policies |
-| **Cisco ASA** | Parse `show` command output to extract ACLs, interfaces, connections, routes; detect drift between snapshots |
-
-Credentials are stored locally (not committed) and configured via **Settings → Integrations**. All reads are unauthenticated to the OT side — integrations only contact IT/network systems that expect API access.
-
-## .dbd Export/Import
-
-deadband exports and imports complete asset inventories (including site metadata) using the `.dbd` file format — CSV with site metadata encoded as comment headers:
-
-```
-# deadband export v1
-# exported: 2026-04-14T21:30:00Z
-# site: Plant-A|10.0.1.0/24,10.0.2.0/24|Building 7|Chicago IL|ops@example.com
-# site: Plant-B|10.0.3.0/24|Building 12|Detroit MI|
-ID,IP,Vendor,Model,Firmware,Name,Site,Zone,Criticality,Status,...
-```
-
-```bash
-# Export
-curl http://localhost:8484/api/assets/export?format=dbd -o assets.dbd
-
-# Import into another instance
-curl -X POST http://other-host:8484/api/assets/import/dbd \
-  --data-binary @assets.dbd -H 'Content-Type: text/csv'
-```
-
-Also available in the web UI on the Assets page.
-
-## Active Scanning Protocols
-
-| Protocol | Port | Vendor(s) | Method |
-|----------|------|-----------|--------|
-| CIP/EIP ListIdentity | UDP 44818 | Rockwell Automation | Broadcast + unicast, extracts ProductName + firmware revision |
-| S7comm SZL Read | TCP 102 | Siemens (S7-300/400/1200/1500) | 3-phase handshake (COTP + S7 Setup + SZL 0x001C), extracts module name + firmware |
-| Modbus TCP Device ID | TCP 502 | Schneider, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton | FC 43 / MEI 14 Read Device Identification |
-| MELSEC/SLMP | TCP 5007 | Mitsubishi Electric (iQ-R, iQ-F, Q, L, FX5) | Read Type Name (0x0101), extracts CPU model |
-| BACnet/IP | UDP 47808 | Trane, Honeywell, Johnson Controls, Carrier, Daikin | Who-Is + ReadProperty, extracts vendor ID + model + firmware |
-| FINS | UDP 9600 | Omron (CJ, CP, CS, NJ, NX) | Controller Data Read (0501), extracts CPU model + firmware |
-| GE-SRTP | TCP 18245 | Emerson / GE (PACSystems, Series 90, VersaMax) | INIT handshake + Controller Type Read (0x43) |
-| OPC UA | TCP 4840 | Siemens, Kepware, Prosys, Unified Automation | Hello + GetEndpoints, extracts application URI + product name |
-
-Auto mode (`--mode auto`, default) runs all protocols concurrently and merges results.
-
-## Passive PCAP Analysis
-
-```bash
-bin/deadband pcap capture.pcap --out-format json -o devices.json
-```
-
-Extracts device identity from CIP, S7comm, Modbus, and HTTP traffic in a packet capture. Useful when active scanning is prohibited. Accepts the same `--compliance`, `--prioritize`, and output flags as inventory check mode.
+|---|---|
+| HIGH | Vendor + model exact match, firmware in advisory range (clean semver) |
+| MEDIUM | Vendor + model match, version comparison ambiguous |
+| LOW | Vendor match only, model is partial / wildcard |
 
 ## Vendor Coverage
 
-deadband's advisory database covers 3,600+ CISA ICS advisories across 500+ vendors. Top vendors by advisory count:
-
-| Vendor | Advisories | Protocol |
-|--------|-----------|----------|
-| Siemens | 979 | S7comm + OPC UA |
-| Rockwell Automation | 229 | CIP/EIP |
-| Schneider Electric | 224 | Modbus TCP |
-| Hitachi Energy / ABB | 167 | Modbus TCP |
-| Mitsubishi Electric | 115 | MELSEC/SLMP |
-| Delta Electronics | 94 | Modbus TCP |
-| Advantech | 78 | Modbus TCP / HTTP |
-| Emerson / GE | 62 | Modbus TCP + GE-SRTP |
-| Moxa | 48 | Modbus TCP / HTTP |
-| Honeywell | 35 | BACnet/IP |
-| Yokogawa | 30 | Modbus TCP |
-| Omron | 28 | FINS |
-| Phoenix Contact | 23 | Modbus TCP |
-| WAGO | 11 | Modbus TCP |
+The advisory database covers 3,600+ CISA ICS advisories across 500+ vendors. Recently expanded for the CNC market: **Fanuc**, **Haas Automation**, **Heidenhain**, **Okuma**, **Yamazaki Mazak**, plus extended Mitsubishi Electric aliases for the M700/M800/M80/E80 CNC series.
 
 ## Project Structure
 
 ```
 cmd/deadband/main.go       # CLI entrypoint
-pkg/acl/                   # Zone-to-zone ACL policies + gap analysis
-pkg/advisory/              # Advisory DB load/save/query
-pkg/asa/                   # Cisco ASA config ingestion + drift detection
-pkg/asset/                 # Asset inventory store + vulnerability state
-pkg/baseline/              # Snapshot save/compare
-pkg/cli/                   # Safety banner
-pkg/compliance/            # IEC 62443, NIST CSF, NERC CIP mappings
-pkg/diff/                  # Inventory snapshot diff
-pkg/discover/              # Multi-protocol active discovery + scheduler
-pkg/enrichment/            # CISA KEV + FIRST EPSS
-pkg/integration/           # External integration configs (Sentinel, ASA)
-pkg/inventory/             # Multi-format inventory parsing
+pkg/advisory/              # Advisory DB load/save
+pkg/asset/                 # Asset inventory + vulnerability state
+pkg/cli/banner.go          # Safety banner
+pkg/discover/              # Active discovery (CIP, S7, Modbus, MELSEC, FINS, SRTP, OPC UA, Haas, Fanuc; BACnet behind build tag)
+pkg/inventory/             # CSV / JSON / flat parsing
 pkg/matcher/               # Vendor, model, version matching
-pkg/output/                # Text, CSV, JSON, HTML, SARIF, .dbd formatters
-pkg/pcap/                  # Passive device extraction from captures
-pkg/posture/               # Sensitivity-ordered subnet posture scanner
-pkg/sentinel/              # Azure Sentinel / Log Analytics client
-pkg/server/                # HTTP API + embedded web UI
-pkg/site/                  # Site management (CIDR zone grouping)
-pkg/updater/               # CISA CSAF fetch and cache
-web/                       # Next.js 16 frontend (static export)
+pkg/output/                # Text, CSV, JSON, HTML, SARIF writers
+pkg/server/                # HTTP API + report export endpoint
+pkg/updater/               # CISA CSAF fetch (snapshot + per-file)
+web/                       # Next.js frontend (Dashboard, Scan, Settings)
 ```
+
+Routes for `/acl`, `/posture`, `/sites`, `/assets`, `/advisories` remain on disk but are hidden from the v0.5 sidebar pending decisions about the enterprise market.
 
 ## License
 
