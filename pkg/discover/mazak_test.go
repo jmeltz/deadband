@@ -1,10 +1,18 @@
 package discover
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -677,6 +685,188 @@ func TestSMB2NegotiateRequest(t *testing.T) {
 	// Dialect at offset 100
 	if pkt[100] != 0x02 || pkt[101] != 0x02 {
 		t.Errorf("dialect = % X, want 02 02 (SMB 2.0.2)", pkt[100:102])
+	}
+}
+
+// generateSelfSignedCert mints a self-signed ECDSA cert with the given
+// CommonName — mirrors what Windows RDP does at install time.
+func generateSelfSignedCert(t *testing.T, cn string) tls.Certificate {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	return cert
+}
+
+// startFakeRDPServer accepts a single connection, performs the X.224
+// negotiation (responding with NEG_RSP advertising SSL selected), then
+// upgrades to TLS using a self-signed cert with the supplied CN.
+func startFakeRDPServer(t *testing.T, cn string) (string, func()) {
+	t.Helper()
+	cert := generateSelfSignedCert(t, cn)
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// Read the X.224 Connection Request — drain it.
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 512)
+		_, _ = conn.Read(buf)
+
+		// Send X.224 Connection Confirm + RDP_NEG_RSP indicating SSL selected.
+		// TPKT(4) + COTP CC(7) + NEG_RSP(8) = 19 bytes.
+		resp := []byte{
+			// TPKT
+			0x03, 0x00, 0x00, 0x13,
+			// COTP CC: length=14, type=0xD0, dst-ref=0, src-ref=0x1234, class=0
+			0x0E, 0xD0, 0x00, 0x00, 0x12, 0x34, 0x00,
+			// RDP_NEG_RSP: type=0x02, flags=0x00, length=0x0008 LE,
+			// selectedProto=0x00000001 LE (SSL)
+			0x02, 0x00, 0x08, 0x00,
+			0x01, 0x00, 0x00, 0x00,
+		}
+		_, _ = conn.Write(resp)
+
+		// Upgrade to TLS.
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		tlsConn := tls.Server(conn, tlsCfg)
+		_ = tlsConn.Handshake()
+		_ = tlsConn.Close()
+	}()
+	return ln.Addr().String(), func() { _ = ln.Close() }
+}
+
+func TestMazakRDPCertExtraction(t *testing.T) {
+	cases := []struct {
+		name, cn  string
+		wantMatch bool
+	}{
+		{"integrex_match", "INTEGREX-I400S", true},
+		{"mazak_nexus_match", "MAZAK-NEXUS-450", true},
+		{"variaxis_match", "VARIAXIS-J600", true},
+		{"non_mazak_no_match", "RANDOM-PC-001", false},
+		{"empty_cn", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			addr, stop := startFakeRDPServer(t, tc.cn)
+			defer stop()
+
+			host, portStr, _ := net.SplitHostPort(addr)
+			var port int
+			fmt.Sscanf(portStr, "%d", &port)
+
+			id := mazakRDPAt(host, port, 2*time.Second)
+			if !tc.wantMatch {
+				if id != nil {
+					t.Errorf("expected nil identity (CN=%q), got %+v", tc.cn, id)
+				}
+				return
+			}
+			if id == nil {
+				t.Fatal("expected Mazak identity, got nil")
+			}
+			if id.Source != "rdp" {
+				t.Errorf("Source = %q, want rdp", id.Source)
+			}
+			if id.Model != tc.cn {
+				t.Errorf("Model = %q, want %q", id.Model, tc.cn)
+			}
+		})
+	}
+}
+
+// mazakRDPAt mirrors MazakRDP but targets an arbitrary host:port instead
+// of the hardcoded RDPPort.
+func mazakRDPAt(ip string, port int, timeout time.Duration) *MazakIdentity {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(rdpConnectionRequest()); err != nil {
+		conn.Close()
+		return nil
+	}
+	resp := make([]byte, 256)
+	n, err := conn.Read(resp)
+	if err != nil || n < 19 || resp[11] != 0x02 {
+		conn.Close()
+		return nil
+	}
+	if binary.LittleEndian.Uint32(resp[15:19])&0x00000003 == 0 {
+		conn.Close()
+		return nil
+	}
+	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, ServerName: ip})
+	defer tlsConn.Close()
+	if err := tlsConn.Handshake(); err != nil {
+		return nil
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return nil
+	}
+	cn := strings.TrimSpace(state.PeerCertificates[0].Subject.CommonName)
+	if cn == "" || !mazakHostnameRE.MatchString(cn) {
+		return nil
+	}
+	return &MazakIdentity{Model: cn, Source: "rdp"}
+}
+
+func TestRDPConnectionRequest(t *testing.T) {
+	pkt := rdpConnectionRequest()
+	// TPKT version
+	if pkt[0] != 0x03 {
+		t.Errorf("TPKT version = 0x%02X, want 0x03", pkt[0])
+	}
+	// X.224 PDU code (CR = 0xE0)
+	if pkt[5] != 0xE0 {
+		t.Errorf("X.224 PDU code = 0x%02X, want 0xE0 (CR)", pkt[5])
+	}
+	// RDP_NEG_REQ type byte should be present near the end
+	if !strings.Contains(string(pkt), "Cookie: mstshash=") {
+		t.Error("packet missing mstshash cookie")
+	}
+	// Last 8 bytes are the RDP_NEG_REQ
+	negReq := pkt[len(pkt)-8:]
+	if negReq[0] != 0x01 {
+		t.Errorf("NEG_REQ type = 0x%02X, want 0x01", negReq[0])
+	}
+	requestedProto := binary.LittleEndian.Uint32(negReq[4:8])
+	if requestedProto&0x00000001 == 0 {
+		t.Errorf("requestedProto = 0x%X, want SSL bit set", requestedProto)
 	}
 }
 

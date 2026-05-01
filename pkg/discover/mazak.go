@@ -26,6 +26,7 @@
 package discover
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
@@ -818,19 +819,160 @@ func bytesIndex(s, sub []byte) int {
 	return -1
 }
 
-// MazakProbe runs all six Mazak fingerprints concurrently against ip and
+// RDPPort is TCP/3389. Used by the novel RDP-TLS-cert-CN probe to extract
+// the Windows hostname from the self-signed certificate the RDP server
+// presents during the SSL upgrade handshake.
+const RDPPort = 3389
+
+// MazakRDP probes the RDP service on TCP/3389, performs the X.224 SSL
+// negotiation, and extracts the Common Name from the server's TLS
+// certificate. On Windows, the RDP service self-signs its certificate
+// using the machine's NetBIOS hostname as the CN — same value SMB
+// NTLMSSP yields, but reachable from a different surface.
+//
+// Why this is the novel one in the Mazak probe set:
+//
+//   - RDP is the one Windows-specific service no other CNC vendor in
+//     deadband (Fanuc, Haas, Rockwell, Siemens) runs natively. Its
+//     presence on a CNC is itself a Mazatrol-Smooth signal.
+//   - The cert is presented before any authentication, so it works even
+//     when SMB anonymous SESSION_SETUP is disabled (some industrial
+//     sites enforce Kerberos-only authentication).
+//   - The cert CN is set automatically by Windows from the computer
+//     name; no integrator action needed.
+//   - Read-only by construction: we complete the TLS handshake (one-way
+//     server-auth), read the certificate, and close. No CredSSP, no
+//     credentials, no RDP session attempt.
+//
+// Returns nil on any failure: 3389 closed, server doesn't support TLS,
+// cert has empty CN, or CN doesn't match the Mazak hostname regex.
+func MazakRDP(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", RDPPort))
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil, nil
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+
+	// Step 1: X.224 Connection Request with RDP_NEG_REQ requesting SSL.
+	if _, err := conn.Write(rdpConnectionRequest()); err != nil {
+		conn.Close()
+		return nil, nil
+	}
+
+	// Step 2: read X.224 Connection Confirm and check NEG_RSP.
+	resp := make([]byte, 256)
+	n, err := conn.Read(resp)
+	if err != nil || n < 19 {
+		conn.Close()
+		return nil, nil
+	}
+	// TPKT(4) + COTP CC header(7) = 11 bytes; RDP_NEG_RSP starts at offset 11.
+	// NEG_RSP layout: type(1, must be 0x02) + flags(1) + length(2) + selectedProto(4)
+	if resp[11] != 0x02 {
+		// Server didn't include NEG_RSP — likely doesn't support TLS upgrade.
+		conn.Close()
+		return nil, nil
+	}
+	selectedProto := binary.LittleEndian.Uint32(resp[15:19])
+	// Selected protocol bit 0x00000001 = PROTOCOL_SSL; 0x00000002 = HYBRID
+	// (CredSSP); 0x00000000 = legacy RDP only. Either SSL bit lets us reach
+	// the cert.
+	if selectedProto&0x00000003 == 0 {
+		conn.Close()
+		return nil, nil
+	}
+
+	// Step 3: TLS handshake on top of the live TCP connection.
+	tlsConn := tls.Client(conn, &tls.Config{
+		// Self-signed RDP certs by definition won't validate against any
+		// public root. We're extracting the CN, not authenticating the
+		// server; skipping verify is the correct thing here.
+		InsecureSkipVerify: true,
+		// Match the SNI server_name to the IP — Windows RDP servers
+		// don't typically check SNI, but some hardened configs do.
+		ServerName: ip,
+	})
+	defer tlsConn.Close()
+
+	if err := tlsConn.Handshake(); err != nil {
+		return nil, nil
+	}
+
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return nil, nil
+	}
+	leaf := state.PeerCertificates[0]
+	cn := strings.TrimSpace(leaf.Subject.CommonName)
+	if cn == "" {
+		return nil, nil
+	}
+	if !mazakHostnameRE.MatchString(cn) {
+		return nil, nil
+	}
+	return &MazakIdentity{
+		Model: cn,
+		Banner: fmt.Sprintf("RDP TLS cert CN=%q issuer=%q sigAlg=%s",
+			cn, leaf.Issuer.CommonName, leaf.SignatureAlgorithm),
+		Source: "rdp",
+	}, nil
+}
+
+// rdpConnectionRequest builds a TPKT-framed X.224 Class 0 Connection
+// Request carrying an RDP_NEG_REQ that asks the server to upgrade to
+// SSL/TLS. Wire format per [MS-RDPBCGR] §2.2.1.1.
+func rdpConnectionRequest() []byte {
+	// RDP_NEG_REQ: type(0x01) + flags(0x00) + length(0x0008 LE) + requestedProtocols(0x00000003 LE = SSL|HYBRID)
+	negReq := []byte{
+		0x01, 0x00, 0x08, 0x00,
+		0x03, 0x00, 0x00, 0x00, // request SSL or HYBRID — we accept either
+	}
+
+	// "mstshash" cookie — the convention RDP clients send to identify
+	// themselves to load balancers. Empty hash is fine; we just need the
+	// cookie present so MS-RDPBCGR-compliant servers parse the rest.
+	cookie := []byte("Cookie: mstshash=\r\n")
+
+	// X.224 Connection Request body: dst_ref(2) + src_ref(2) + class(1) + cookie + negReq
+	x224Body := make([]byte, 0, 5+len(cookie)+len(negReq))
+	x224Body = append(x224Body, 0x00, 0x00) // dst-ref
+	x224Body = append(x224Body, 0x00, 0x00) // src-ref
+	x224Body = append(x224Body, 0x00)       // class option
+	x224Body = append(x224Body, cookie...)
+	x224Body = append(x224Body, negReq...)
+
+	// COTP header: length(1) + PDU code(1, 0xE0=CR) + body
+	// length is total COTP bytes minus the length byte itself.
+	cotpLen := byte(1 + len(x224Body))
+	cotp := make([]byte, 0, 2+len(x224Body))
+	cotp = append(cotp, cotpLen, 0xE0)
+	cotp = append(cotp, x224Body...)
+
+	// TPKT header: version(3) + reserved(0) + length(2 BE)
+	total := 4 + len(cotp)
+	tpkt := []byte{0x03, 0x00, byte(total >> 8), byte(total & 0xFF)}
+	return append(tpkt, cotp...)
+}
+
+// MazakProbe runs all seven Mazak fingerprints concurrently against ip and
 // returns the first positive hit, with this precedence:
 //
-//	CIP (vendor=246) > NetBIOS UDP (hostname pattern) > SMB2 NTLMSSP (hostname pattern) >
+//	CIP (vendor=246) > NetBIOS UDP > SMB2 NTLMSSP > RDP TLS cert CN >
 //	MTConnect (manufacturer=Mazak) > HTTP (body match) > Port-shape (Firebird + Simple TCP/IP services)
 //
-// CIP wins because vendor ID is canonical. NetBIOS UDP and SMB2 NTLMSSP
-// both extract the Windows hostname; UDP is faster but firewalled by
-// default on Windows 10/11 Public profile, so SMB over TCP/445 is the
-// reliable fallback. MTConnect carries an integrator-set manufacturer
-// attribute. HTTP body-match is a fallback for branded operator pages.
-// Port-shape is the last-resort heuristic for stock Smooth HMIs serving a
-// bare IIS welcome with both NetBIOS and SMB hostname disclosure dead.
+// CIP wins because vendor ID is canonical. NetBIOS UDP, SMB2 NTLMSSP, and
+// RDP TLS cert CN all extract the Windows hostname through different
+// surfaces — they're ordered by speed (UDP fast, SMB medium, RDP-TLS
+// slowest because it does a full TLS handshake) but each survives a
+// failure mode the previous one doesn't. RDP-TLS is the novel-to-deadband
+// path: works even when SMB anonymous auth is disabled, because the cert
+// is presented before any authentication exchange.
+//
+// MTConnect carries an integrator-set manufacturer attribute. HTTP
+// body-match is a fallback for branded operator pages. Port-shape is the
+// last-resort heuristic for stock Smooth HMIs with every targeted hostname
+// surface locked down.
 //
 // Verbose callback (when non-nil) reports per-probe outcomes for
 // `--mode mazak` operators on a single host.
@@ -840,6 +982,7 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 		cipID    *MazakIdentity
 		nbID     *MazakIdentity
 		smbID    *MazakIdentity
+		rdpID    *MazakIdentity
 		httpID   *MazakIdentity
 		shapeID  *MazakIdentity
 		mtIDs    []*MazakIdentity
@@ -890,6 +1033,22 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 				verbose(fmt.Sprintf("Mazak SMB probe (%s:%d): no Mazak-pattern hostname via NTLMSSP", ip, SMBPort))
 			} else {
 				verbose(fmt.Sprintf("Mazak SMB probe (%s:%d): %s", ip, SMBPort, id.Banner))
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakRDP(ip, timeout)
+		mu.Lock()
+		rdpID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak RDP probe (%s:%d): no Mazak-pattern CN in TLS cert", ip, RDPPort))
+			} else {
+				verbose(fmt.Sprintf("Mazak RDP probe (%s:%d): %s", ip, RDPPort, id.Banner))
 			}
 		}
 	}()
@@ -954,6 +1113,8 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 		return nbID
 	case smbID != nil:
 		return smbID
+	case rdpID != nil:
+		return rdpID
 	}
 	for _, id := range mtIDs {
 		if id != nil {
@@ -998,6 +1159,8 @@ func mazakPortFor(id *MazakIdentity) int {
 		return NetBIOSPort
 	case "smb":
 		return SMBPort
+	case "rdp":
+		return RDPPort
 	case "http":
 		return 80
 	case "firebird", "port-shape":
@@ -1015,8 +1178,8 @@ func mazakPortFor(id *MazakIdentity) int {
 // discoverMazak runs MazakProbe over a slice of IPs concurrently.
 func discoverMazak(ips []string, timeout time.Duration, concurrency int, progress func(string)) []inventory.Device {
 	if progress != nil {
-		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, SMB/TCP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
-			len(ips), EIPPort, NetBIOSPort, SMBPort, mazakMTConnectPorts, FirebirdPort))
+		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, SMB/TCP %d, RDP-TLS/TCP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
+			len(ips), EIPPort, NetBIOSPort, SMBPort, RDPPort, mazakMTConnectPorts, FirebirdPort))
 	}
 
 	verbose := func(s string) {}
