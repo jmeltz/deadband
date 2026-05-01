@@ -328,6 +328,54 @@ func TestMazakNetBIOSUDPFixture(t *testing.T) {
 			hosts:     []string{"SMOOTH-PRINTER"}, // "smooth" alone is not in regex
 			wantMatch: false,
 		},
+		{
+			// Real-world case: integrator commissioned the i-400S with just
+			// the bare model designator as the Windows hostname.
+			name:      "bare_model_i400s",
+			hosts:     []string{"I400S", "WORKGROUP"},
+			wantMatch: true,
+			wantModel: "I400S",
+		},
+		{
+			name:      "integrex_dashed_i400st",
+			hosts:     []string{"I-400ST", "DOMAIN"},
+			wantMatch: true,
+			wantModel: "I-400ST",
+		},
+		{
+			name:      "variaxis_j600",
+			hosts:     []string{"J600", "WORKGROUP"},
+			wantMatch: true,
+			wantModel: "J600",
+		},
+		{
+			name:      "machining_center_vcn_410",
+			hosts:     []string{"VCN-410", "WORKGROUP"},
+			wantMatch: true,
+			wantModel: "VCN-410",
+		},
+		{
+			name:      "quickturn_qtn_250",
+			hosts:     []string{"QTN-250", "WORKGROUP"},
+			wantMatch: true,
+			wantModel: "QTN-250",
+		},
+		{
+			// i7 CPU + 4 digits — word boundary should reject this. The
+			// regex needs `i` + optional dash + 2-4 digits + word boundary,
+			// but "I7000" goes i, 7, 0, 0, 0 with no boundary between
+			// digits — so the [a-z]{0,4} block is empty and the trailing
+			// \b can't anchor between digits. No match.
+			name:      "intel_i7000_no_match",
+			hosts:     []string{"I7000-SERVER", "WORKGROUP"},
+			wantMatch: false,
+		},
+		{
+			// Intel i7-7700 desktop — same word-boundary protection.
+			name:      "intel_i7_7700_no_match",
+			hosts:     []string{"I7-7700-PC", "WORKGROUP"},
+			wantMatch: false,
+		},
 	}
 
 	for _, tc := range cases {

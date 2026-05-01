@@ -81,11 +81,40 @@ var mazakModelRE = regexp.MustCompile(
 )
 
 // mazakHostnameRE matches Mazak-pattern NetBIOS hostnames as set by Mazak
-// integrators at commissioning. Discriminator words (mazatrol, integrex,
-// smoothx, variaxis, multiplex, quickturn) are essentially Mazak-only —
-// generic terms like "smooth" alone are NOT in this list.
+// integrators at commissioning. Two flavors of pattern:
+//
+//  1. Discriminator words (mazatrol, integrex, smoothx, variaxis, multiplex,
+//     quickturn) — essentially Mazak-only.
+//
+//  2. Mazak model-number conventions for installations where the integrator
+//     commissioned the machine with just the model designator as the
+//     hostname (real-world example: an Integrex i-400S commissioned as
+//     "I400S"). The dash is optional, the trailing letter suffix (S, ST,
+//     V, etc.) covers variants. Word boundaries prevent matching things
+//     like "I7000" (i7 CPU model) or "I7-PC".
+//
+// The model-number patterns carry a small false-positive risk against
+// random hostnames like "J400-PRINTER", but Mazak's specific letter+3-digit
+// model namespace combined with the contextual probability (we only look
+// at hostnames extracted from a Windows-shaped CNC controller) makes this
+// acceptable for the discovery use case.
 var mazakHostnameRE = regexp.MustCompile(
-	`(?i)\b(mazak|mazatrol|integrex|smoothx|smoothg|smoothai|nexus|qtn|quickturn|variaxis|multiplex|smartbox)\b`,
+	`(?i)\b(` +
+		// Brand and platform names
+		`mazak|mazatrol|integrex|smoothx|smoothg|smoothai|nexus|qtn|quickturn|variaxis|multiplex|smartbox|` +
+		// Integrex / Variaxis i-series (i-100..i-800 + suffix variants ST/S/V/etc.).
+		// Capped at 3 digits — Integrex/Variaxis don't have 4-digit models, so
+		// hostnames like "I7000-SERVER" or "I7-7700-PC" don't get falsely
+		// classified as Mazak.
+		`i-?[0-9]{2,3}[a-z]{0,4}|` +
+		// Variaxis / Integrex j-series and e-series (3 digits)
+		`[je]-?[0-9]{3}[a-z]{0,3}|` +
+		// Horizontal / vertical machining centers (HCN/VCN/VCS/VCU/HCR/FJV/FH —
+		// 3-4 digits, e.g. HCN-5000)
+		`(?:hcn|vcn|vcs|vcu|hcr|fjv|fh)-?[0-9]{3,4}[a-z]*|` +
+		// QuickTurn / Nexus model numbers (QTN-100..QTN-450, etc.)
+		`qtn-?[0-9]{2,4}[a-z]*` +
+		`)\b`,
 )
 
 // mazakHTTPRE matches Mazak strings inside an HTTP / response body. Used
