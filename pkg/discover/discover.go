@@ -21,6 +21,8 @@ const (
 	ModeFINS       DiscoveryMode = "fins"
 	ModeSRTP       DiscoveryMode = "srtp"
 	ModeOPCUA      DiscoveryMode = "opcua"
+	ModeHaas       DiscoveryMode = "haas"
+	ModeFanuc      DiscoveryMode = "fanuc"
 	ModeAuto       DiscoveryMode = "auto"
 	ModeLegacyHTTP DiscoveryMode = "http"
 )
@@ -63,6 +65,10 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runSRTP(opts, ips)
 	case ModeOPCUA:
 		return runOPCUA(opts, ips)
+	case ModeHaas:
+		return runHaas(opts, ips)
+	case ModeFanuc:
+		return runFanuc(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
 	default:
@@ -188,9 +194,37 @@ func runOPCUA(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runHaas(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Haas Q-command discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverHaas(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Haas discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
+func runFanuc(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Fanuc FTP-banner discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverFanucFTP(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Fanuc discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet + FINS + SRTP + OPC UA) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + BACnet + FINS + SRTP + OPC UA + Haas + Fanuc) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -206,6 +240,8 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	finsCh := make(chan result, 1)
 	srtpCh := make(chan result, 1)
 	opcuaCh := make(chan result, 1)
+	haasCh := make(chan result, 1)
+	fanucCh := make(chan result, 1)
 
 	go func() {
 		d, e := runCIP(opts, ips)
@@ -239,6 +275,14 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		d, e := runOPCUA(opts, ips)
 		opcuaCh <- result{d, e}
 	}()
+	go func() {
+		d, e := runHaas(opts, ips)
+		haasCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runFanuc(opts, ips)
+		fanucCh <- result{d, e}
+	}()
 
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
@@ -248,6 +292,8 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	finsResult := <-finsCh
 	srtpResult := <-srtpCh
 	opcuaResult := <-opcuaCh
+	haasResult := <-haasCh
+	fanucResult := <-fanucCh
 
 	// Merge results, deduplicate by IP (prefer result with non-empty Model)
 	seen := make(map[string]inventory.Device)
@@ -289,6 +335,16 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 			seen[d.IP] = d
 		}
 	}
+	for _, d := range haasResult.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
+	for _, d := range fanucResult.devices {
+		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+			seen[d.IP] = d
+		}
+	}
 
 	devices := make([]inventory.Device, 0, len(seen))
 	for _, d := range seen {
@@ -300,7 +356,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	}
 
 	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil {
+	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && bacnetResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil {
 		return devices, cipResult.err
 	}
 

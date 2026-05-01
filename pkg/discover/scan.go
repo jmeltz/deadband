@@ -18,6 +18,8 @@ const (
 	FINSPort      = 9600
 	SRTPPort      = 18245
 	OPCUAPort     = 4840
+	HaasPort      = 5051 // Haas NGC Q-command interface
+	FanucFTPPort  = 21   // Fanuc CNC controllers expose an FTP server with a fingerprintable banner
 )
 
 // MaxCIDRHosts caps the number of addresses ExpandCIDR will return,
