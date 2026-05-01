@@ -232,8 +232,10 @@ func buildFanucCIPResponse(productName string) []byte {
 // parses cleanly and FanucCIPVendorID matches the value 252 the spec
 // requires. End-to-end UDP behavior is covered by TestFanucCIPUDPFixture.
 func TestFanucCIPParse(t *testing.T) {
-	if FanucCIPVendorID != 252 {
-		t.Fatalf("FanucCIPVendorID = %d, want 252 per ODVA registry", FanucCIPVendorID)
+	// 591 is FANUC CORPORATION per the ODVA EtherNet/IP Vendor ID registry,
+	// confirmed against a Fanuc 32i EDS dump (VendCode=591).
+	if FanucCIPVendorID != 591 {
+		t.Fatalf("FanucCIPVendorID = %d, want 591 per ODVA registry", FanucCIPVendorID)
 	}
 	resp := buildFanucCIPResponse("R-30iB Mate Plus")
 	id, err := ParseListIdentityResponse(resp)

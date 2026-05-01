@@ -50,16 +50,17 @@ var vendorNames = map[uint16]string{
 	40:  "ABB",
 	56:  "Molex",
 	90:  "Turck",
-	252: "Fanuc",
 	266: "Schneider Electric",
 	283: "Siemens",
+	591: "Fanuc",
 	671: "Honeywell",
 }
 
-// FanucCIPVendorID is Fanuc's ODVA EtherNet/IP Vendor ID. Used by the
-// Fanuc-specific probe to confirm a CIP responder is in fact a Fanuc
-// controller.
-const FanucCIPVendorID uint16 = 252
+// FanucCIPVendorID is FANUC CORPORATION's ODVA EtherNet/IP Vendor ID.
+// Verified against a real Fanuc 32i EDS file: VendCode=591, VendName=
+// "FANUC CORPORATION". Used by the Fanuc-specific probe to confirm a CIP
+// responder is in fact a Fanuc controller.
+const FanucCIPVendorID uint16 = 591
 
 // buildListIdentityRequest returns a 24-byte EIP ListIdentity request.
 func buildListIdentityRequest() []byte {
