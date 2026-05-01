@@ -54,6 +54,7 @@ export function Sidebar() {
   const nav: NavItem[] = [
     { kind: "link", href: "/", label: "Dashboard", icon: DashboardIcon },
     { kind: "link", href: "/scan", label: "Scan", icon: ScanIcon },
+    { kind: "link", href: "/assets", label: "Assets", icon: AssetsIcon },
     { kind: "action", label: "Report", icon: ReportIcon, onClick: handleReport, pending: exporting },
     { kind: "link", href: "/settings", label: "Settings", icon: SettingsIcon },
   ];
@@ -144,6 +145,19 @@ function ScanIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <circle cx="7" cy="7" r="4.5" />
       <path d="M11 11l3.5 3.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AssetsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="2" y="1" width="12" height="4" rx="1" />
+      <rect x="2" y="6" width="12" height="4" rx="1" />
+      <rect x="2" y="11" width="12" height="4" rx="1" />
+      <circle cx="5" cy="3" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="8" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="13" r="0.75" fill="currentColor" stroke="none" />
     </svg>
   );
 }
