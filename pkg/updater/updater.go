@@ -30,6 +30,34 @@ type UpdateOpts struct {
 }
 
 func Update(opts UpdateOpts) (*advisory.Database, error) {
+	// Snapshot path: when opts.Source is empty (default) or an http(s) URL,
+	// try to fetch a single pre-built advisories.json — much faster and
+	// resilient to GitHub egress filtering. On any failure we transparently
+	// fall back to the per-file CSAF path. opts.Source == "github" forces
+	// per-file fetch and skips the snapshot probe entirely.
+	mode, snapshotURL := classifySource(opts.Source)
+	if mode == sourceSnapshotDefault || mode == sourceSnapshotURL {
+		db, err := loadFromSnapshot(snapshotURL, opts.Progress)
+		if err == nil {
+			if saveErr := advisory.SaveDatabase(opts.DBPath, db); saveErr != nil {
+				return nil, fmt.Errorf("saving snapshot database: %w", saveErr)
+			}
+			return db, nil
+		}
+		if opts.Progress != nil {
+			opts.Progress(fmt.Sprintf("snapshot unavailable (%v), falling back to per-file fetch", err))
+		}
+		// Explicit snapshot URL with checksum failure should not fall back —
+		// the user asked for that specific snapshot. Default snapshot failure
+		// falls through to the per-file path below.
+		if mode == sourceSnapshotURL {
+			return nil, err
+		}
+		// Clear opts.Source so the per-file path uses GitHub, not the URL we
+		// just failed to fetch.
+		opts.Source = ""
+	}
+
 	// Load existing DB for merge
 	existing, _ := advisory.LoadDatabase(opts.DBPath)
 

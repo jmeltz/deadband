@@ -99,7 +99,7 @@ func main() {
 	flag.BoolVar(&update, "update", false, "Fetch/refresh advisory database from CISA CSAF repo")
 	flag.BoolVar(&stats, "stats", false, "Show advisory DB metadata")
 	flag.StringVar(&since, "since", "", "Only fetch advisories published after this date (YYYY-MM-DD)")
-	flag.StringVar(&source, "source", "", "Local CSAF mirror path (for air-gapped update)")
+	flag.StringVar(&source, "source", "", "Update source: empty=snapshot+fallback, 'github'=per-file fetch, http(s)://...=specific snapshot URL, /local/path=air-gapped CSAF mirror")
 
 	// Discovery flags
 	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
