@@ -56,6 +56,23 @@ type MazakIdentity struct {
 // off-machine — not relevant here.
 var mazakMTConnectPorts = []int{5000, 5001}
 
+// FirebirdPort is TCP/3050 — Firebird/Interbase RDBMS default. Mazatrol
+// Smooth uses an embedded Firebird database for tool/program/parameter
+// storage; its presence on a Windows-HMI-shaped host is a strong Mazak
+// signal in combination with other ports.
+const FirebirdPort = 3050
+
+// mazakSimpleTCPPorts are the five Windows "Simple TCP/IP Services"
+// (Echo/Discard/Daytime/Qotd/Chargen). They're a single Windows feature
+// that ships off-by-default since Server 2003; Mazatrol Smooth's HMI image
+// enables all five. Default Windows admins essentially never turn this on.
+var mazakSimpleTCPPorts = []int{7, 9, 13, 17, 19}
+
+// mazakBonusPorts add weight to the port-shape match without being
+// required. LPD (515) and MSMQ (1801) are commonly enabled on Smooth HMI
+// images; their presence reinforces but doesn't drive the heuristic.
+var mazakBonusPorts = []int{515, 1801}
+
 // mazakModelRE matches Mazak product family names that appear in MTConnect
 // `<Device model="...">` attributes and in CIP ProductName strings.
 var mazakModelRE = regexp.MustCompile(
@@ -360,17 +377,194 @@ func firstLineMazak(s string) string {
 	return ""
 }
 
-// MazakProbe runs all four Mazak fingerprints concurrently against ip and
+// MazakPortShape is the last-resort fingerprint for Mazatrol Smooth
+// controllers running their stock Windows IPC HMI image without any of
+// the optional connectivity packages (no EtherNet/IP, no MTConnect, no
+// custom HTTP page, NetBIOS firewalled).
+//
+// It runs two cheap parallel checks:
+//
+//  1. TCP-connect probes against the {Firebird 3050, Simple TCP/IP Services
+//     7/9/13/17/19, LPD 515, MSMQ 1801} port set. The combination of
+//     Firebird PLUS three or more Simple TCP/IP Services on the same
+//     Windows host is essentially a Mazatrol Smooth signature — Simple
+//     TCP/IP Services is a single Windows feature that's off by default
+//     since Server 2003 and almost nobody enables on a non-OEM image.
+//
+//  2. A Firebird `op_connect` handshake on port 3050 if it's open. The
+//     server's first response opcode (op_accept = 3 or op_reject = 4)
+//     confirms the listener actually speaks Firebird, ruling out unrelated
+//     services that happen to bind 3050.
+//
+// Returns:
+//   - nil if Firebird isn't open (the heuristic anchor) — too noisy without it
+//   - identity with Source="firebird" if Firebird handshake succeeds
+//   - identity with Source="port-shape" if Firebird port is open but
+//     handshake didn't complete, AND ≥3 Simple TCP/IP Services responded
+//   - nil if neither threshold met
+//
+// All probes are read-only — TCP connects close immediately, the Firebird
+// op_connect is the standard handshake message with no auth attempt.
+func MazakPortShape(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	// Phase 1: parallel TCP-connect probes.
+	type portStatus struct {
+		port int
+		open bool
+	}
+	allPorts := append([]int{FirebirdPort}, mazakSimpleTCPPorts...)
+	allPorts = append(allPorts, mazakBonusPorts...)
+	results := make(chan portStatus, len(allPorts))
+
+	var wg sync.WaitGroup
+	for _, p := range allPorts {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+			c, err := net.DialTimeout("tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", p)), timeout)
+			open := err == nil
+			if c != nil {
+				_ = c.Close()
+			}
+			results <- portStatus{p, open}
+		}(p)
+	}
+	wg.Wait()
+	close(results)
+
+	openPorts := make(map[int]bool)
+	for s := range results {
+		if s.open {
+			openPorts[s.port] = true
+		}
+	}
+
+	// Anchor: Firebird must be open. Without it the rest is too generic.
+	if !openPorts[FirebirdPort] {
+		return nil, nil
+	}
+
+	// Count Simple TCP/IP Services hits.
+	simpleHits := 0
+	for _, p := range mazakSimpleTCPPorts {
+		if openPorts[p] {
+			simpleHits++
+		}
+	}
+	if simpleHits < 3 {
+		// Firebird alone — too noisy. Any Windows app server could host
+		// Firebird; it's only Mazak-specific in combination with the
+		// HMI port shape.
+		return nil, nil
+	}
+
+	// Phase 2: Firebird handshake confirmation.
+	confirmed := mazakFirebirdHandshake(ip, timeout)
+
+	bonus := 0
+	for _, p := range mazakBonusPorts {
+		if openPorts[p] {
+			bonus++
+		}
+	}
+	source := "port-shape"
+	model := "Mazatrol Smooth (port-shape match)"
+	if confirmed {
+		source = "firebird"
+		model = "Mazatrol Smooth (Firebird-confirmed)"
+	}
+	banner := fmt.Sprintf("port-shape: firebird=%v simpleTCP=%d/5 bonus=%d/2 firebird_handshake=%v",
+		openPorts[FirebirdPort], simpleHits, bonus, confirmed)
+
+	return &MazakIdentity{
+		Model:  model,
+		Banner: banner,
+		Source: source,
+	}, nil
+}
+
+// mazakFirebirdHandshake sends a minimal Firebird op_connect packet and
+// returns true if the server's first response opcode is in the valid
+// Firebird response range (op_accept=3, op_reject=4, op_response=9, etc.).
+// Read-only: op_connect carries no credentials and the connection closes
+// after the response is read.
+func mazakFirebirdHandshake(ip string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", FirebirdPort)), timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(timeout))
+
+	pkt := buildFirebirdOpConnect()
+	if _, err := conn.Write(pkt); err != nil {
+		return false
+	}
+
+	buf := make([]byte, 16)
+	n, err := io.ReadFull(conn, buf[:4])
+	if err != nil || n < 4 {
+		return false
+	}
+	opcode := binary.BigEndian.Uint32(buf[:4])
+	// Valid Firebird response opcodes for op_connect are op_accept (3),
+	// op_reject (4), op_disconnect (5), op_response (9), op_accept_data (81),
+	// op_cond_accept (87). Be permissive — any opcode in the small valid
+	// range counts as "this is Firebird".
+	switch opcode {
+	case 3, 4, 5, 9, 81, 87:
+		return true
+	}
+	// Some Firebird builds reply with a higher op_accept_data variant; allow
+	// anything <=128 as a Firebird-ish opcode.
+	return opcode > 0 && opcode <= 128
+}
+
+// buildFirebirdOpConnect emits a minimal op_connect packet (CONNECT_VERSION2,
+// arch_generic, file_name="test", one protocol entry) sufficient for any
+// Firebird/Interbase server to send back a parseable response. We don't care
+// whether the protocols negotiate; we just need any valid response opcode.
+func buildFirebirdOpConnect() []byte {
+	pkt := make([]byte, 0, 64)
+	put := func(v uint32) {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], v)
+		pkt = append(pkt, b[:]...)
+	}
+	put(1)  // op_connect
+	put(19) // op_attach (the eventual operation)
+	put(2)  // CONNECT_VERSION2 — older form, no user_identification field
+	put(1)  // arch_generic
+
+	// file_name "test" — 4-byte length prefix + 4 bytes of data (no padding
+	// needed since 4 % 4 == 0).
+	put(4)
+	pkt = append(pkt, []byte("test")...)
+
+	// Protocol count
+	put(1)
+
+	// Single protocol entry (version 10, arch_generic, type range 0..1,
+	// weight 1)
+	put(10)
+	put(1)
+	put(0)
+	put(1)
+	put(1)
+
+	return pkt
+}
+
+// MazakProbe runs all five Mazak fingerprints concurrently against ip and
 // returns the first positive hit, with this precedence:
 //
-//	CIP (vendor=246) > NetBIOS (hostname pattern) > MTConnect (manufacturer=Mazak) > HTTP (body match)
+//	CIP (vendor=246) > NetBIOS (hostname pattern) > MTConnect (manufacturer=Mazak) > HTTP (body match) > Port-shape (Firebird + Simple TCP/IP services)
 //
-// CIP wins because vendor ID is canonical. MTConnect outranks NetBIOS in
-// product code structure, but we put NetBIOS second here because in
+// CIP wins because vendor ID is canonical. NetBIOS comes next because in
 // practice an i-400S with no MTConnect option exposes nothing on TCP/5000
-// while still emitting a Mazak-pattern NetBIOS name. HTTP is the
-// lowest-confidence fallback for shops with NetBIOS firewalled and
-// branded IIS pages.
+// while still emitting a Mazak-pattern NetBIOS name. MTConnect carries an
+// integrator-set manufacturer attribute. HTTP body-match is a fallback for
+// branded operator pages. Port-shape is the last-resort heuristic for
+// stock Smooth HMIs serving a bare IIS welcome with NetBIOS firewalled.
 //
 // Verbose callback (when non-nil) reports per-probe outcomes for
 // `--mode mazak` operators on a single host.
@@ -380,6 +574,7 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 		cipID    *MazakIdentity
 		nbID     *MazakIdentity
 		httpID   *MazakIdentity
+		shapeID  *MazakIdentity
 		mtIDs    []*MazakIdentity
 		wg       sync.WaitGroup
 	)
@@ -450,6 +645,23 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 			}
 		}(i, port)
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakPortShape(ip, timeout)
+		mu.Lock()
+		shapeID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak port-shape probe (%s): no Mazatrol-Smooth signature", ip))
+			} else {
+				verbose(fmt.Sprintf("Mazak port-shape probe (%s): %s", ip, id.Banner))
+			}
+		}
+	}()
+
 	wg.Wait()
 
 	switch {
@@ -465,6 +677,9 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 	}
 	if httpID != nil {
 		return httpID
+	}
+	if shapeID != nil {
+		return shapeID
 	}
 	return nil
 }
@@ -498,6 +713,8 @@ func mazakPortFor(id *MazakIdentity) int {
 		return NetBIOSPort
 	case "http":
 		return 80
+	case "firebird", "port-shape":
+		return FirebirdPort
 	case "mtconnect":
 		if id.AgentPort != 0 {
 			return id.AgentPort
@@ -511,8 +728,8 @@ func mazakPortFor(id *MazakIdentity) int {
 // discoverMazak runs MazakProbe over a slice of IPs concurrently.
 func discoverMazak(ips []string, timeout time.Duration, concurrency int, progress func(string)) []inventory.Device {
 	if progress != nil {
-		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, MTConnect/TCP %v, HTTP/TCP 80",
-			len(ips), EIPPort, NetBIOSPort, mazakMTConnectPorts))
+		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
+			len(ips), EIPPort, NetBIOSPort, mazakMTConnectPorts, FirebirdPort))
 	}
 
 	verbose := func(s string) {}

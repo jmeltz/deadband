@@ -3,6 +3,7 @@ package discover
 import (
 	"encoding/binary"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -475,6 +476,111 @@ func mazakHTTPAt(baseURL string, timeout time.Duration) *MazakIdentity {
 		id.Model = strings.TrimSpace(m)
 	}
 	return id
+}
+
+// startFirebirdListener spins up a TCP listener that responds to op_connect
+// with op_accept (opcode 3) — minimum viable Firebird server for tests.
+func startFirebirdListener(t *testing.T, opcode uint32) (net.Listener, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				// Drain whatever the client sent (the op_connect packet)
+				conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+				buf := make([]byte, 256)
+				_, _ = conn.Read(buf)
+				// Reply with the requested opcode (4 bytes big-endian)
+				resp := make([]byte, 4)
+				binary.BigEndian.PutUint32(resp, opcode)
+				_, _ = conn.Write(resp)
+			}(c)
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	var p int
+	_, _ = fmt.Sscanf(port, "%d", &p)
+	return ln, p
+}
+
+func TestFirebirdHandshakeAccepts(t *testing.T) {
+	cases := []struct {
+		name      string
+		opcode    uint32
+		want      bool
+	}{
+		{"op_accept", 3, true},
+		{"op_reject", 4, true},
+		{"op_disconnect", 5, true},
+		{"op_response", 9, true},
+		{"http_garbage", 0x48545450, false}, // "HTTP" — well outside Firebird opcode range
+		{"smb_negotiate", 0xFE534D42, false}, // "\xfeSMB"
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, _ := startFirebirdListener(t, tc.opcode)
+			defer ln.Close()
+
+			host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+			var port int
+			fmt.Sscanf(portStr, "%d", &port)
+
+			got := mazakFirebirdHandshakeAt(host, port, 500*time.Millisecond)
+			if got != tc.want {
+				t.Errorf("opcode=0x%X: got %v, want %v", tc.opcode, got, tc.want)
+			}
+		})
+	}
+}
+
+// mazakFirebirdHandshakeAt is a test variant of mazakFirebirdHandshake that
+// targets an arbitrary port instead of the hardcoded FirebirdPort. The
+// handshake protocol is otherwise identical.
+func mazakFirebirdHandshakeAt(ip string, port int, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", port)), timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(timeout))
+	pkt := buildFirebirdOpConnect()
+	if _, err := conn.Write(pkt); err != nil {
+		return false
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return false
+	}
+	opcode := binary.BigEndian.Uint32(buf)
+	switch opcode {
+	case 3, 4, 5, 9, 81, 87:
+		return true
+	}
+	return opcode > 0 && opcode <= 128
+}
+
+func TestBuildFirebirdOpConnect(t *testing.T) {
+	pkt := buildFirebirdOpConnect()
+	// Minimum size: 4 (op_connect) + 4 (op_attach) + 4 (version) + 4 (arch)
+	// + 4 (filename len) + 4 (filename "test") + 4 (proto count)
+	// + 5*4 (one protocol entry) = 48 bytes
+	if len(pkt) != 48 {
+		t.Errorf("op_connect length = %d, want 48", len(pkt))
+	}
+	if binary.BigEndian.Uint32(pkt[0:4]) != 1 {
+		t.Errorf("opcode = %d, want 1 (op_connect)", binary.BigEndian.Uint32(pkt[0:4]))
+	}
+	if binary.BigEndian.Uint32(pkt[4:8]) != 19 {
+		t.Errorf("operation = %d, want 19 (op_attach)", binary.BigEndian.Uint32(pkt[4:8]))
+	}
 }
 
 // mazakMTConnectAt is a test helper that probes an arbitrary base URL
