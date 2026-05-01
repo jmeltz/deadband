@@ -523,25 +523,25 @@ export interface ASAConfig {
 
 // --- Sentinel Flow Data ---
 
-export interface FlowRecord {
-  observed_at: string;
-  ingested_at: string;
+export interface SentinelFlow {
+  device_hostname: string;
+  source_zone: string;
   source_addr: string;
+  dest_zone: string;
   dest_addr: string;
   dest_port: number;
-  protocol: string;
-  source_zone: string;
-  dest_zone: string;
+  dest_nat_addr?: string;
+  dest_nat_port?: number;
   connection_count: number;
-  action: string;
-  kind: "observed" | "implied" | string;
-  source_id: string;
-  source_hash: string;
-  enrichment?: Record<string, string>;
+  computer_name?: string;
+  user_name?: string;
+  full_name?: string;
+  job_title?: string;
+  department?: string;
+  mail_address?: string;
+  company_name?: string;
+  os_name?: string;
 }
-
-/** @deprecated use FlowRecord */
-export type SentinelFlow = FlowRecord;
 
 export interface SentinelSnapshot {
   id: string;
@@ -549,46 +549,7 @@ export interface SentinelSnapshot {
   config_id: string;
   queried_at: string;
   flow_count: number;
-  flows: FlowRecord[];
-}
-
-// --- ACL simulation ---
-
-export interface FlowVerdict {
-  flow: FlowRecord;
-  matched_rule_id: string;
-  action: "permit" | "deny" | string;
-  reason: string;
-}
-
-export interface DiffSummary {
-  total: number;
-  permit: number;
-  deny: number;
-  implied: number;
-}
-
-export interface ZoneCount {
-  source_zone: string;
-  dest_zone: string;
-  count: number;
-}
-
-export interface UnchangedAggregate {
-  count: number;
-  by_zone: ZoneCount[];
-}
-
-export interface DiffResult {
-  newly_denied: FlowVerdict[];
-  newly_allowed: FlowVerdict[];
-  unchanged: UnchangedAggregate;
-}
-
-export interface SimulationResponse {
-  current: DiffSummary;
-  planned: DiffSummary;
-  diff: DiffResult;
+  flows: SentinelFlow[];
 }
 
 export interface ZoneTrafficSummary {

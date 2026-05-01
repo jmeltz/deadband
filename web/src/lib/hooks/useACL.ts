@@ -47,9 +47,3 @@ export function useGapAnalysis(policyId: string | null, opts?: { includeFlows?: 
     enabled: !!policyId,
   });
 }
-
-export function useSimulatePolicy() {
-  return useMutation({
-    mutationFn: api.simulatePolicy,
-  });
-}

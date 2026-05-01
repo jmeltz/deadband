@@ -2,8 +2,6 @@ package sentinel
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,18 +11,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmeltz/deadband/pkg/flow"
 	"github.com/jmeltz/deadband/pkg/integration"
 )
 
 // Client communicates with Azure Log Analytics to query Sentinel flow data.
 type Client struct {
-	tenantID     string
-	clientID     string
+	tenantID    string
+	clientID    string
 	clientSecret string
-	workspaceID  string
-	configID     string
-	httpClient   *http.Client
+	workspaceID string
+	httpClient  *http.Client
 
 	mu          sync.Mutex
 	token       string
@@ -34,12 +30,11 @@ type Client struct {
 // NewClient creates a Sentinel client from an integration config.
 func NewClient(cfg integration.SentinelConfig) *Client {
 	return &Client{
-		tenantID:     cfg.TenantID,
-		clientID:     cfg.ClientID,
+		tenantID:    cfg.TenantID,
+		clientID:    cfg.ClientID,
 		clientSecret: cfg.ClientSecret,
-		workspaceID:  cfg.WorkspaceID,
-		configID:     cfg.ID,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		workspaceID: cfg.WorkspaceID,
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -103,11 +98,8 @@ func (c *Client) ensureToken(ctx context.Context) error {
 	return nil
 }
 
-// QueryFlows executes a KQL query and returns parsed flow data as canonical
-// FlowRecords. Records are tagged with SourceID "sentinel:<configID>" and
-// SourceHash set to the sha256 of the executed query — this lets downstream
-// code trace a flow back to the exact source config and KQL that produced it.
-func (c *Client) QueryFlows(ctx context.Context, query string) ([]flow.FlowRecord, error) {
+// QueryFlows executes a KQL query and returns parsed flow data.
+func (c *Client) QueryFlows(ctx context.Context, query string) ([]SentinelFlow, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
@@ -158,69 +150,39 @@ func (c *Client) QueryFlows(ctx context.Context, query string) ([]flow.FlowRecor
 		return nil, nil
 	}
 
+	// Build column index
 	colIdx := make(map[string]int, len(result.Tables[0].Columns))
 	for i, col := range result.Tables[0].Columns {
 		colIdx[col.Name] = i
 	}
 
-	sum := sha256.Sum256([]byte(query))
-	meta := flowMeta{
-		sourceID:   "sentinel:" + c.configID,
-		sourceHash: hex.EncodeToString(sum[:]),
-		ingestedAt: time.Now().UTC(),
-	}
-	return parseFlows(colIdx, result.Tables[0].Rows, meta), nil
+	return parseFlows(colIdx, result.Tables[0].Rows), nil
 }
 
-type flowMeta struct {
-	sourceID   string
-	sourceHash string
-	ingestedAt time.Time
-}
+func parseFlows(colIdx map[string]int, rows [][]any) []SentinelFlow {
 
-// enrichmentKeys are the columns we pass through into FlowRecord.Enrichment.
-// They match today's hardcoded KQL join; the preview-driven flow source in
-// phase 2 replaces this with user-defined mappings.
-var enrichmentKeys = []string{
-	"DeviceHostname", "ComputerName", "UserName", "FullName", "JobTitle",
-	"Department", "MailAddress", "CompanyName", "OsName",
-}
-
-func parseFlows(colIdx map[string]int, rows [][]any, meta flowMeta) []flow.FlowRecord {
-	flows := make([]flow.FlowRecord, 0, len(rows))
+	flows := make([]SentinelFlow, 0, len(rows))
 	for _, row := range rows {
-		rec := flow.FlowRecord{
-			ObservedAt:      meta.ingestedAt,
-			IngestedAt:      meta.ingestedAt,
+		f := SentinelFlow{
+			DeviceHostname:  toString(row, colIdx, "DeviceHostname"),
 			SourceZone:      toString(row, colIdx, "SourceZone"),
 			SourceAddr:      toString(row, colIdx, "SourceAddr"),
 			DestZone:        toString(row, colIdx, "DestZone"),
 			DestAddr:        toString(row, colIdx, "DestAddr"),
 			DestPort:        toInt(row, colIdx, "DestPort"),
-			Protocol:        flow.ProtoTCP,
+			DestNATAddr:     toString(row, colIdx, "DestNATAddr"),
+			DestNATPort:     toInt(row, colIdx, "DestNATPort"),
 			ConnectionCount: toInt(row, colIdx, "ConnectionCount"),
-			Kind:            flow.KindObserved,
-			SourceID:        meta.sourceID,
-			SourceHash:      meta.sourceHash,
+			ComputerName:    toString(row, colIdx, "ComputerName"),
+			UserName:        toString(row, colIdx, "UserName"),
+			FullName:        toString(row, colIdx, "FullName"),
+			JobTitle:        toString(row, colIdx, "JobTitle"),
+			Department:      toString(row, colIdx, "Department"),
+			MailAddress:     toString(row, colIdx, "MailAddress"),
+			CompanyName:     toString(row, colIdx, "CompanyName"),
+			OsName:          toString(row, colIdx, "OsName"),
 		}
-
-		enrichment := make(map[string]string)
-		for _, k := range enrichmentKeys {
-			if v := toString(row, colIdx, k); v != "" {
-				enrichment[k] = v
-			}
-		}
-		if natAddr := toString(row, colIdx, "DestNATAddr"); natAddr != "" {
-			enrichment["DestNATAddr"] = natAddr
-		}
-		if natPort := toInt(row, colIdx, "DestNATPort"); natPort != 0 {
-			enrichment["DestNATPort"] = fmt.Sprintf("%d", natPort)
-		}
-		if len(enrichment) > 0 {
-			rec.Enrichment = enrichment
-		}
-
-		flows = append(flows, rec)
+		flows = append(flows, f)
 	}
 	return flows
 }

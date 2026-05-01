@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/acl"
-	"github.com/jmeltz/deadband/pkg/acl/simulate"
-	"github.com/jmeltz/deadband/pkg/flow"
 	"github.com/jmeltz/deadband/pkg/integration"
 	"github.com/jmeltz/deadband/pkg/advisory"
 	"github.com/jmeltz/deadband/pkg/asset"
@@ -1907,9 +1905,38 @@ func (s *Server) handleAnalyzeGaps(w http.ResponseWriter, r *http.Request) {
 
 	var gapOpts []acl.GapOpts
 
+	// Enrich with Sentinel flow data if requested
 	if r.URL.Query().Get("include_flows") == "true" && s.sentinelStore != nil {
-		if snap := s.sentinelStore.GetLatest(policy.SiteID); snap != nil && len(snap.Flows) > 0 {
-			gapOpts = append(gapOpts, acl.GapOpts{Flows: snap.Flows})
+		snap := s.sentinelStore.GetLatest(policy.SiteID)
+		if snap != nil && len(snap.Flows) > 0 {
+			flowPorts := make(map[string]int)
+			flowIdentities := make(map[string][]acl.FlowIdentity)
+
+			// Index flows by zone pair + port
+			for _, f := range snap.Flows {
+				srcZone := f.SourceZone
+				dstZone := f.DestZone
+				if srcZone == "" || dstZone == "" {
+					continue
+				}
+				key := fmt.Sprintf("%s|%s|%d", srcZone, dstZone, f.DestPort)
+				flowPorts[key] += f.ConnectionCount
+
+				// Collect identity info
+				if f.UserName != "" || f.Department != "" {
+					zoneKey := fmt.Sprintf("%s|%s", srcZone, dstZone)
+					flowIdentities[zoneKey] = append(flowIdentities[zoneKey], acl.FlowIdentity{
+						UserName:   f.UserName,
+						Department: f.Department,
+						FlowCount:  f.ConnectionCount,
+					})
+				}
+			}
+
+			gapOpts = append(gapOpts, acl.GapOpts{
+				FlowZonePorts:      flowPorts,
+				FlowZoneIdentities: flowIdentities,
+			})
 		}
 	}
 
@@ -1918,115 +1945,6 @@ func (s *Server) handleAnalyzeGaps(w http.ResponseWriter, r *http.Request) {
 		violations = []acl.Violation{}
 	}
 	writeJSON(w, http.StatusOK, violations)
-}
-
-func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SiteID          string     `json:"site_id"`
-		PolicyID        string     `json:"policy_id"`
-		PlannedPolicy   acl.Policy `json:"planned_policy"`
-		FlowWindow      string     `json:"flow_window"`
-		IncludeObserved *bool      `json:"include_observed,omitempty"`
-		IncludeImplied  *bool      `json:"include_implied,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
-		return
-	}
-	if req.SiteID == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "site_id is required"})
-		return
-	}
-
-	current := s.aclStore.Get(req.PolicyID)
-	if current == nil {
-		writeJSON(w, http.StatusNotFound, errorResponse{Error: "current policy not found"})
-		return
-	}
-	st := s.siteStore.Get(req.SiteID)
-	if st == nil {
-		writeJSON(w, http.StatusNotFound, errorResponse{Error: "site not found"})
-		return
-	}
-
-	includeObserved := true
-	if req.IncludeObserved != nil {
-		includeObserved = *req.IncludeObserved
-	}
-	includeImplied := true
-	if req.IncludeImplied != nil {
-		includeImplied = *req.IncludeImplied
-	}
-
-	window := parseFlowWindow(req.FlowWindow)
-
-	var flows []flow.FlowRecord
-
-	if includeObserved && s.sentinelStore != nil {
-		if snap := s.sentinelStore.GetLatest(req.SiteID); snap != nil {
-			cutoff := time.Now().Add(-window)
-			for _, f := range snap.Flows {
-				if f.ObservedAt.IsZero() || f.ObservedAt.After(cutoff) {
-					flows = append(flows, f)
-				}
-			}
-		}
-	}
-
-	if includeImplied && s.postureStore != nil {
-		report := s.postureStore.Latest()
-		if report != nil {
-			rules := make([]flow.PolicyRuleAdapter, 0, len(req.PlannedPolicy.Rules))
-			for _, r := range req.PlannedPolicy.Rules {
-				if r.Action != "allow" {
-					continue
-				}
-				rules = append(rules, flow.PolicyRuleAdapter{
-					ID:         r.ID,
-					SourceZone: r.SourceZone,
-					DestZone:   r.DestZone,
-					Ports:      r.Ports,
-				})
-			}
-			implied := flow.SynthesizeImplied(rules, *report, st.Zones)
-			flows = append(flows, implied...)
-		}
-	}
-
-	currentVerdicts := simulate.Evaluate(*current, flows, st.Zones)
-	plannedVerdicts := simulate.Evaluate(req.PlannedPolicy, flows, st.Zones)
-	diff := simulate.Diff(currentVerdicts, plannedVerdicts)
-
-	resp := simulate.SimulationResponse{
-		Current: simulate.Summarize(currentVerdicts),
-		Planned: simulate.Summarize(plannedVerdicts),
-		Diff:    diff,
-	}
-	if resp.Diff.NewlyDenied == nil {
-		resp.Diff.NewlyDenied = []simulate.FlowVerdict{}
-	}
-	if resp.Diff.NewlyAllowed == nil {
-		resp.Diff.NewlyAllowed = []simulate.FlowVerdict{}
-	}
-	if resp.Diff.Unchanged.ByZone == nil {
-		resp.Diff.Unchanged.ByZone = []simulate.ZoneCount{}
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func parseFlowWindow(s string) time.Duration {
-	switch s {
-	case "24h":
-		return 24 * time.Hour
-	case "7d", "":
-		return 7 * 24 * time.Hour
-	case "30d":
-		return 30 * 24 * time.Hour
-	}
-	if d, err := time.ParseDuration(s); err == nil {
-		return d
-	}
-	return 7 * 24 * time.Hour
 }
 
 // --- Integration config handlers ---
