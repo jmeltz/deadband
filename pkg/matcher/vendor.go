@@ -10,7 +10,7 @@ var vendorAliases = map[string][]string{
 	"Siemens":             {"siemens", "siemens ag", "simens"},
 	"Schneider Electric":  {"schneider", "schneider electric", "se", "schneider electric software, llc", "schneider electric software"},
 	"ABB":                 {"abb", "abb ltd"},
-	"Mitsubishi Electric": {"mitsubishi", "mitsubishi electric", "mitsubishi electric corporation", "mitsubishi electric europe b.v.", "mitsubishi electric india"},
+	"Mitsubishi Electric": {"mitsubishi", "mitsubishi electric", "mitsubishi electric corporation", "mitsubishi electric europe b.v.", "mitsubishi electric india", "m700", "m800", "m80", "e80"},
 	"Emerson / GE":        {"emerson", "emerson electric", "ge", "general electric", "ge digital", "ge vernova", "emerson / ge", "general electric (ge)", "ge healthcare", "emerson process management", "general electric (ge) and emerson"},
 	"Honeywell":           {"honeywell"},
 	"Yokogawa":            {"yokogawa", "yokogawa electric"},
@@ -50,6 +50,13 @@ var vendorAliases = map[string][]string{
 	// --- Other ICS-relevant vendors ---
 	"AutomationDirect": {"automationdirect", "automation direct"},
 	"PEPPERL+FUCHS":    {"pepperl+fuchs"},
+
+	// --- CNC controllers / machine tools (job shop market) ---
+	"Fanuc":           {"fanuc", "fanuc america", "ge fanuc", "fanuc robotics", "fanuc corporation"},
+	"Haas Automation": {"haas", "haas cnc", "haas automation", "haas automation, inc.", "haas automation inc"},
+	"Heidenhain":      {"heidenhain", "dr. johannes heidenhain", "johannes heidenhain"},
+	"Okuma":           {"okuma", "okuma america", "okuma corporation"},
+	"Yamazaki Mazak":  {"mazak", "mazatrol", "yamazaki mazak"},
 }
 
 // vendorPatterns provides substring matching for compound/variant vendor strings
@@ -98,6 +105,19 @@ var vendorPatterns = []struct {
 	{"festo", "Festo"},
 	{"trane", "Trane"},
 	{"aveva", "AVEVA"},
+
+	// --- CNC controllers / machine tools (job shop market) ---
+	// Longest first to avoid false positives ("ge fanuc" must beat "fanuc"
+	// only because "fanuc" canonicalizes the same way; both safe here).
+	{"yamazaki mazak", "Yamazaki Mazak"},
+	{"haas automation", "Haas Automation"},
+	{"johannes heidenhain", "Heidenhain"},
+	{"ge fanuc", "Fanuc"},
+	{"fanuc", "Fanuc"},
+	{"haas", "Haas Automation"},
+	{"mazak", "Yamazaki Mazak"},
+	{"okuma", "Okuma"},
+	{"heidenhain", "Heidenhain"},
 }
 
 var reverseAliases map[string]string

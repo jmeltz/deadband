@@ -54,6 +54,28 @@ func TestNormalizeVendor(t *testing.T) {
 		{"Carrier", "Carrier"},
 		{"Carrier LenelS2", "Carrier"},
 
+		// CNC controllers (exact alias)
+		{"Fanuc", "Fanuc"},
+		{"FANUC", "Fanuc"},
+		{"Fanuc America", "Fanuc"},
+		{"GE Fanuc", "Fanuc"},
+		{"Fanuc Robotics", "Fanuc"},
+		{"Haas", "Haas Automation"},
+		{"Haas CNC", "Haas Automation"},
+		{"Haas Automation, Inc.", "Haas Automation"},
+		{"HEIDENHAIN", "Heidenhain"},
+		{"Dr. Johannes Heidenhain", "Heidenhain"},
+		{"Okuma America", "Okuma"},
+		{"Okuma Corporation", "Okuma"},
+		{"Mazak", "Yamazaki Mazak"},
+		{"Mazatrol", "Yamazaki Mazak"},
+		{"Yamazaki Mazak", "Yamazaki Mazak"},
+		// Mitsubishi CNC series
+		{"M700", "Mitsubishi Electric"},
+		{"M800", "Mitsubishi Electric"},
+		{"M80", "Mitsubishi Electric"},
+		{"E80", "Mitsubishi Electric"},
+
 		// Passthrough for unknown
 		{"Unknown Corp", "Unknown Corp"},
 		{"", ""},
@@ -100,6 +122,13 @@ func TestNormalizeVendorSubstringMatching(t *testing.T) {
 		// ICONICS variants (substring → Mitsubishi Electric)
 		{"ICONICS, Mitsubishi Electric", "ICONICS"},  // exact alias hit first
 		{"Mitsubishi Electric Iconics Digital Solutions and Mitsubishi Electric", "Mitsubishi Electric"},
+
+		// CNC compound strings (substring fallback)
+		{"FANUC America Corporation", "Fanuc"},
+		{"Haas Automation, Inc., Oxnard CA", "Haas Automation"},
+		{"DR. JOHANNES HEIDENHAIN GmbH", "Heidenhain"},
+		{"Yamazaki Mazak Corporation", "Yamazaki Mazak"},
+		{"Mazak USA", "Yamazaki Mazak"},
 	}
 	for _, tt := range tests {
 		got := NormalizeVendor(tt.input)
@@ -141,6 +170,16 @@ func TestVendorMatches(t *testing.T) {
 		{"Hitachi Energy", "ABB", false},
 		{"AVEVA", "Schneider Electric", false},
 		{"ICONICS", "Mitsubishi Electric", false},
+
+		// CNC vendor unification
+		{"Fanuc America", "Fanuc Corporation", true},
+		{"Haas Automation, Inc.", "Haas", true},
+		{"GE Fanuc", "Fanuc", true},
+		{"Mazak", "Yamazaki Mazak", true},
+		{"Heidenhain", "DR. JOHANNES HEIDENHAIN", true},
+		// CNC vendors don't cross-match
+		{"Fanuc", "Haas Automation", false},
+		{"Okuma", "Mazak", false},
 	}
 	for _, tt := range tests {
 		got := VendorMatches(tt.inv, tt.adv)
