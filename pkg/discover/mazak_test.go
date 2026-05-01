@@ -583,6 +583,103 @@ func TestBuildFirebirdOpConnect(t *testing.T) {
 	}
 }
 
+// buildNTLMSSPChallenge synthesizes a minimal NTLMSSP_CHALLENGE_MESSAGE
+// with a single TargetInfo AV_PAIR of type MsvAvNbComputerName containing
+// the given hostname (UTF-16LE encoded).
+func buildNTLMSSPChallenge(computerName string) []byte {
+	// Encode hostname as UTF-16LE
+	encoded := make([]byte, 0, len(computerName)*2)
+	for _, r := range computerName {
+		encoded = append(encoded, byte(r), byte(r>>8))
+	}
+
+	// AV_PAIR list: MsvAvNbComputerName + MsvAvEOL
+	avPairs := make([]byte, 0, 8+len(encoded))
+	avPairs = append(avPairs, 0x01, 0x00) // AvId = 1 (NbComputerName)
+	avPairs = append(avPairs, byte(len(encoded)), byte(len(encoded)>>8))
+	avPairs = append(avPairs, encoded...)
+	avPairs = append(avPairs, 0x00, 0x00, 0x00, 0x00) // MsvAvEOL
+
+	// NTLMSSP_CHALLENGE_MESSAGE: 56 bytes header + payload
+	payloadOffset := 56
+	pkt := make([]byte, payloadOffset+len(avPairs))
+	copy(pkt[0:8], []byte("NTLMSSP\x00"))
+	binary.LittleEndian.PutUint32(pkt[8:12], 2) // MessageType=2
+	// TargetNameFields all zero — no target name
+	binary.LittleEndian.PutUint32(pkt[20:24], 0) // NegotiateFlags
+	// ServerChallenge zero, Reserved zero
+	// TargetInfoFields
+	binary.LittleEndian.PutUint16(pkt[40:42], uint16(len(avPairs))) // Len
+	binary.LittleEndian.PutUint16(pkt[42:44], uint16(len(avPairs))) // MaxLen
+	binary.LittleEndian.PutUint32(pkt[44:48], uint32(payloadOffset)) // Offset
+	// Version zeros
+	copy(pkt[payloadOffset:], avPairs)
+	return pkt
+}
+
+func TestParseNTLMSSPChallenge(t *testing.T) {
+	cases := []struct {
+		name, hostname string
+	}{
+		{"integrex_i400s", "INTEGREX-I400S"},
+		{"mazak_nexus", "MAZAK-NEXUS-450"},
+		{"empty", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := buildNTLMSSPChallenge(tc.hostname)
+			got := parseNTLMSSPChallenge(pkt)
+			if got != tc.hostname {
+				t.Errorf("got %q, want %q", got, tc.hostname)
+			}
+		})
+	}
+}
+
+func TestParseNTLMSSPChallenge_Malformed(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"too_short", []byte("NTLMSSP\x00")},
+		{"wrong_msgtype", append([]byte("NTLMSSP\x00"), make([]byte, 48)...)}, // MsgType=0
+		{"truncated_targetinfo", func() []byte {
+			b := make([]byte, 56)
+			copy(b[0:8], []byte("NTLMSSP\x00"))
+			binary.LittleEndian.PutUint32(b[8:12], 2)
+			binary.LittleEndian.PutUint16(b[40:42], 100) // huge len
+			binary.LittleEndian.PutUint32(b[44:48], 50)  // offset that overflows
+			return b
+		}()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseNTLMSSPChallenge(tc.data)
+			if got != "" {
+				t.Errorf("got %q, want empty (malformed input)", got)
+			}
+		})
+	}
+}
+
+func TestSMB2NegotiateRequest(t *testing.T) {
+	pkt := smb2NegotiateRequest()
+	if len(pkt) != 102 {
+		t.Errorf("size = %d, want 102", len(pkt))
+	}
+	if string(pkt[0:4]) != "\xFESMB" {
+		t.Errorf("ProtocolId = % X, want FE 53 4D 42", pkt[0:4])
+	}
+	// Command should be NEGOTIATE (0)
+	if binary.LittleEndian.Uint16(pkt[16:18]) != 0 {
+		t.Errorf("Command = %d, want 0 (NEGOTIATE)", binary.LittleEndian.Uint16(pkt[16:18]))
+	}
+	// Dialect at offset 100
+	if pkt[100] != 0x02 || pkt[101] != 0x02 {
+		t.Errorf("dialect = % X, want 02 02 (SMB 2.0.2)", pkt[100:102])
+	}
+}
+
 // mazakMTConnectAt is a test helper that probes an arbitrary base URL
 // instead of the production helper's hard-coded ip:port form.
 func mazakMTConnectAt(baseURL string, timeout time.Duration) *MazakIdentity {

@@ -554,17 +554,283 @@ func buildFirebirdOpConnect() []byte {
 	return pkt
 }
 
-// MazakProbe runs all five Mazak fingerprints concurrently against ip and
+// SMBPort is TCP/445, the direct SMB-over-TCP port. Used by the Mazak SMB
+// probe to extract the controller's NetBIOS hostname over an anonymous
+// SMB2 NEGOTIATE + SESSION_SETUP exchange — works even when UDP/137 is
+// firewalled (Windows Firewall Public-profile default).
+const SMBPort = 445
+
+// MazakSMB runs an anonymous SMB2 NEGOTIATE + SESSION_SETUP against TCP/445
+// and parses the NTLMSSP_CHALLENGE_MESSAGE TargetInfo for the server's
+// NetBIOS computer name. Returns a Mazak identity if the hostname matches
+// the Mazak hostname regex; nil otherwise.
+//
+// Read-only by construction: the exchange goes only as far as
+// NTLMSSP_CHALLENGE (server emits this before any auth attempt). We never
+// send NTLMSSP_AUTHENTICATE, never list shares, never touch the file
+// system. This is the same surface `nmap --script smb-os-discovery` and
+// `nbtscan` use.
+//
+// The hostname doubles as the Model field — Mazak integrators commonly
+// set it to the actual product name (e.g. "INTEGREX-I400S",
+// "MAZAK-NEXUS-450").
+func MazakSMB(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	hostname := smb2Hostname(ip, timeout)
+	if hostname == "" {
+		return nil, nil
+	}
+	if !mazakHostnameRE.MatchString(hostname) {
+		return nil, nil
+	}
+	return &MazakIdentity{
+		Model:  hostname,
+		Banner: fmt.Sprintf("SMB2 NTLMSSP NbComputerName=%s", hostname),
+		Source: "smb",
+	}, nil
+}
+
+// smb2Hostname performs an anonymous SMB2 NEGOTIATE + SESSION_SETUP
+// exchange against ip:445 and extracts the server's NetBIOS computer name
+// from the NTLMSSP_CHALLENGE TargetInfo AV_PAIRS. Returns "" on any
+// failure mode (connection refused, parse error, missing AV pair).
+func smb2Hostname(ip string, timeout time.Duration) string {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", SMBPort)), timeout)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(timeout))
+
+	// Step 1: SMB2 NEGOTIATE
+	if err := writeNBT(conn, smb2NegotiateRequest()); err != nil {
+		return ""
+	}
+	if _, err := readNBT(conn); err != nil {
+		return ""
+	}
+
+	// Step 2: SMB2 SESSION_SETUP with embedded NTLMSSP_NEGOTIATE
+	if err := writeNBT(conn, smb2SessionSetupRequest()); err != nil {
+		return ""
+	}
+	body, err := readNBT(conn)
+	if err != nil {
+		return ""
+	}
+
+	// Locate the NTLMSSP_CHALLENGE_MESSAGE inside the SecurityBuffer.
+	// Rather than parse SPNEGO ASN.1, scan for the NTLMSSP signature
+	// directly — the structure is self-describing from there.
+	idx := bytesIndex(body, []byte("NTLMSSP\x00"))
+	if idx < 0 {
+		return ""
+	}
+	return parseNTLMSSPChallenge(body[idx:])
+}
+
+// writeNBT prefixes a SMB payload with the 4-byte NetBIOS-over-TCP session
+// header (1 byte type=0x00, 3 bytes big-endian length).
+func writeNBT(conn net.Conn, payload []byte) error {
+	hdr := []byte{0x00, byte(len(payload) >> 16), byte(len(payload) >> 8), byte(len(payload))}
+	if _, err := conn.Write(hdr); err != nil {
+		return err
+	}
+	_, err := conn.Write(payload)
+	return err
+}
+
+// readNBT reads one NetBIOS-over-TCP framed message and returns the SMB
+// payload. The 4-byte header is consumed but not returned.
+func readNBT(conn net.Conn) ([]byte, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+		return nil, err
+	}
+	length := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+	if length < 4 || length > 65536 {
+		return nil, fmt.Errorf("invalid NBT message length %d", length)
+	}
+	body := make([]byte, length)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// smb2NegotiateRequest returns a 102-byte SMB2 NEGOTIATE_REQUEST advertising
+// only dialect 2.0.2 — supported by every Windows since Vista/2008 and
+// avoids the SMB 3.1.1 NegotiateContext parsing complexity.
+func smb2NegotiateRequest() []byte {
+	pkt := make([]byte, 64+36+2)
+	// SMB2 header
+	copy(pkt[0:4], []byte{0xFE, 'S', 'M', 'B'})
+	pkt[4] = 64 // StructureSize low byte
+	// CreditCharge=0, Status=0, Command=0(NEGOTIATE), CreditRequest=1
+	pkt[14] = 1 // CreditRequest low byte
+	// MessageId=0, TreeId=0, SessionId=0 — all zeros from make([]byte)
+	// Body starts at offset 64
+	pkt[64] = 36 // StructureSize=36
+	pkt[66] = 1  // DialectCount=1
+	pkt[68] = 1  // SecurityMode=SIGNING_ENABLED
+	// Capabilities=0, ClientGuid=zeros, ClientStartTime=0
+	// Dialects[0] = SMB 2.0.2 = 0x0202
+	pkt[100] = 0x02
+	pkt[101] = 0x02
+	return pkt
+}
+
+// smb2SessionSetupRequest returns a SMB2 SESSION_SETUP_REQUEST whose
+// SecurityBuffer is a SPNEGO NegTokenInit wrapping NTLMSSP_NEGOTIATE.
+// Hostname-extraction-only — no credentials are sent.
+func smb2SessionSetupRequest() []byte {
+	// NTLMSSP_NEGOTIATE_MESSAGE (40 bytes)
+	ntlmNeg := []byte{
+		0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, // "NTLMSSP\0"
+		0x01, 0x00, 0x00, 0x00, // MessageType=1
+		0x07, 0x82, 0x08, 0xA2, // NegotiateFlags: UNICODE|REQ_TARGET|NTLM|SIGN|EXT_SESSION_SECURITY
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // DomainNameFields (empty)
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // WorkstationFields (empty)
+		0x06, 0x01, 0xB1, 0x1D, 0x00, 0x00, 0x00, 0x0F, // Version (Windows 10 spoof)
+	}
+
+	// SPNEGO NegTokenInit wrapper around the NTLMSSP_NEGOTIATE
+	// (ASN.1 DER, hand-assembled — total 74 bytes outer)
+	spnego := []byte{
+		0x60, 0x48, // APPLICATION 0, length 72
+		0x06, 0x06, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x02, // OID 1.3.6.1.5.5.2 (SPNEGO)
+		0xA0, 0x3E, // [0] context tag, length 62
+		0x30, 0x3C, // SEQUENCE, length 60
+		0xA0, 0x0E, // [0] mechTypes, length 14
+		0x30, 0x0C, // SEQUENCE OF OID, length 12
+		0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0A, // OID 1.3.6.1.4.1.311.2.2.10 (NTLMSSP)
+		0xA2, 0x2A, // [2] mechToken, length 42
+		0x04, 0x28, // OCTET STRING, length 40
+	}
+	spnego = append(spnego, ntlmNeg...)
+
+	// SMB2 SESSION_SETUP_REQUEST body (25 bytes header + spnego)
+	bodyHdr := make([]byte, 24)
+	bodyHdr[0] = 25 // StructureSize=25
+	// Flags=0, SecurityMode=1, Capabilities=0, Channel=0
+	bodyHdr[2] = 1                                  // SecurityMode = SIGNING_ENABLED
+	binary.LittleEndian.PutUint16(bodyHdr[12:14], 88) // SecurityBufferOffset = 64 (header) + 24 (body header) = 88
+	binary.LittleEndian.PutUint16(bodyHdr[14:16], uint16(len(spnego)))
+	// PreviousSessionId = 0
+
+	// SMB2 header
+	pkt := make([]byte, 64)
+	copy(pkt[0:4], []byte{0xFE, 'S', 'M', 'B'})
+	pkt[4] = 64                                       // StructureSize
+	pkt[12] = 1                                       // CreditCharge
+	binary.LittleEndian.PutUint16(pkt[16:18], 0x0001) // Command=SESSION_SETUP
+	pkt[18] = 1                                       // CreditRequest
+	binary.LittleEndian.PutUint64(pkt[24:32], 1)      // MessageId=1
+	// All other fields zero
+
+	pkt = append(pkt, bodyHdr...)
+	pkt = append(pkt, spnego...)
+	return pkt
+}
+
+// parseNTLMSSPChallenge takes a byte slice starting with "NTLMSSP\0" and
+// returns the MsvAvNbComputerName from the TargetInfo AV_PAIRS, decoded
+// from UTF-16LE. Returns "" on any parse failure.
+func parseNTLMSSPChallenge(b []byte) string {
+	// NTLMSSP_CHALLENGE_MESSAGE layout:
+	//   0  Signature (8)
+	//   8  MessageType (4) — must be 2
+	//   12 TargetNameFields (8): Len(2), MaxLen(2), Offset(4)
+	//   20 NegotiateFlags (4)
+	//   24 ServerChallenge (8)
+	//   32 Reserved (8)
+	//   40 TargetInfoFields (8): Len(2), MaxLen(2), Offset(4)
+	//   48 Version (8)
+	//   56 ... payload
+	if len(b) < 56 {
+		return ""
+	}
+	if binary.LittleEndian.Uint32(b[8:12]) != 2 {
+		return ""
+	}
+	tiLen := binary.LittleEndian.Uint16(b[40:42])
+	tiOff := binary.LittleEndian.Uint32(b[44:48])
+	if tiLen == 0 || int(tiOff)+int(tiLen) > len(b) {
+		return ""
+	}
+	ti := b[tiOff : int(tiOff)+int(tiLen)]
+
+	// Walk AV_PAIRS: AvId(2), AvLen(2), Value(AvLen)
+	for i := 0; i+4 <= len(ti); {
+		avID := binary.LittleEndian.Uint16(ti[i : i+2])
+		avLen := binary.LittleEndian.Uint16(ti[i+2 : i+4])
+		if avID == 0 { // MsvAvEOL
+			break
+		}
+		if i+4+int(avLen) > len(ti) {
+			break
+		}
+		if avID == 1 { // MsvAvNbComputerName
+			return decodeUTF16LE(ti[i+4 : i+4+int(avLen)])
+		}
+		i += 4 + int(avLen)
+	}
+	return ""
+}
+
+// decodeUTF16LE decodes a UTF-16 little-endian byte slice to a Go string.
+// Stops at the first NUL code unit. Used for NTLMSSP AV_PAIR values.
+func decodeUTF16LE(b []byte) string {
+	if len(b)%2 != 0 {
+		return ""
+	}
+	runes := make([]rune, 0, len(b)/2)
+	for i := 0; i+2 <= len(b); i += 2 {
+		r := rune(binary.LittleEndian.Uint16(b[i : i+2]))
+		if r == 0 {
+			break
+		}
+		runes = append(runes, r)
+	}
+	return string(runes)
+}
+
+// bytesIndex is a thin wrapper to avoid pulling in the bytes package just
+// for one Index call. Returns -1 when sub is not found in s.
+func bytesIndex(s, sub []byte) int {
+	if len(sub) == 0 {
+		return 0
+	}
+	if len(s) < len(sub) {
+		return -1
+	}
+	for i := 0; i <= len(s)-len(sub); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			if s[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+// MazakProbe runs all six Mazak fingerprints concurrently against ip and
 // returns the first positive hit, with this precedence:
 //
-//	CIP (vendor=246) > NetBIOS (hostname pattern) > MTConnect (manufacturer=Mazak) > HTTP (body match) > Port-shape (Firebird + Simple TCP/IP services)
+//	CIP (vendor=246) > NetBIOS UDP (hostname pattern) > SMB2 NTLMSSP (hostname pattern) >
+//	MTConnect (manufacturer=Mazak) > HTTP (body match) > Port-shape (Firebird + Simple TCP/IP services)
 //
-// CIP wins because vendor ID is canonical. NetBIOS comes next because in
-// practice an i-400S with no MTConnect option exposes nothing on TCP/5000
-// while still emitting a Mazak-pattern NetBIOS name. MTConnect carries an
-// integrator-set manufacturer attribute. HTTP body-match is a fallback for
-// branded operator pages. Port-shape is the last-resort heuristic for
-// stock Smooth HMIs serving a bare IIS welcome with NetBIOS firewalled.
+// CIP wins because vendor ID is canonical. NetBIOS UDP and SMB2 NTLMSSP
+// both extract the Windows hostname; UDP is faster but firewalled by
+// default on Windows 10/11 Public profile, so SMB over TCP/445 is the
+// reliable fallback. MTConnect carries an integrator-set manufacturer
+// attribute. HTTP body-match is a fallback for branded operator pages.
+// Port-shape is the last-resort heuristic for stock Smooth HMIs serving a
+// bare IIS welcome with both NetBIOS and SMB hostname disclosure dead.
 //
 // Verbose callback (when non-nil) reports per-probe outcomes for
 // `--mode mazak` operators on a single host.
@@ -573,6 +839,7 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 		mu       sync.Mutex
 		cipID    *MazakIdentity
 		nbID     *MazakIdentity
+		smbID    *MazakIdentity
 		httpID   *MazakIdentity
 		shapeID  *MazakIdentity
 		mtIDs    []*MazakIdentity
@@ -607,6 +874,22 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 				verbose(fmt.Sprintf("Mazak NetBIOS probe (%s:%d): no Mazak-pattern hostname", ip, NetBIOSPort))
 			} else {
 				verbose(fmt.Sprintf("Mazak NetBIOS probe (%s:%d): %s", ip, NetBIOSPort, id.Banner))
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakSMB(ip, timeout)
+		mu.Lock()
+		smbID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak SMB probe (%s:%d): no Mazak-pattern hostname via NTLMSSP", ip, SMBPort))
+			} else {
+				verbose(fmt.Sprintf("Mazak SMB probe (%s:%d): %s", ip, SMBPort, id.Banner))
 			}
 		}
 	}()
@@ -669,6 +952,8 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 		return cipID
 	case nbID != nil:
 		return nbID
+	case smbID != nil:
+		return smbID
 	}
 	for _, id := range mtIDs {
 		if id != nil {
@@ -711,6 +996,8 @@ func mazakPortFor(id *MazakIdentity) int {
 		return EIPPort
 	case "netbios":
 		return NetBIOSPort
+	case "smb":
+		return SMBPort
 	case "http":
 		return 80
 	case "firebird", "port-shape":
@@ -728,8 +1015,8 @@ func mazakPortFor(id *MazakIdentity) int {
 // discoverMazak runs MazakProbe over a slice of IPs concurrently.
 func discoverMazak(ips []string, timeout time.Duration, concurrency int, progress func(string)) []inventory.Device {
 	if progress != nil {
-		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
-			len(ips), EIPPort, NetBIOSPort, mazakMTConnectPorts, FirebirdPort))
+		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, SMB/TCP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
+			len(ips), EIPPort, NetBIOSPort, SMBPort, mazakMTConnectPorts, FirebirdPort))
 	}
 
 	verbose := func(s string) {}
