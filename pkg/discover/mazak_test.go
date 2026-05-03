@@ -744,9 +744,9 @@ func TestMazakHostnameRegex_FQDNs(t *testing.T) {
 		fqdn  string
 		match bool
 	}{
-		// Positive: real PTR records seen in the field.
-		{"I300S.crowncork.com", true},
-		{"I400S.crowncork.com", true},
+		// Positive: real PTR record shapes seen in the field.
+		{"I300S.shop.local", true},
+		{"I400S.shop.local", true},
 		{"INTEGREX-I400S.shopfloor.local", true},
 		{"MAZAK-NEXUS.acme.corp", true},
 		{"VCN-410.factory.internal", true},

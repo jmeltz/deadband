@@ -868,7 +868,7 @@ const RDPPort = 3389
 //
 // On a real-world Mazak Integrex i-300S deployment with port 3389 the
 // only reachable surface, this probe alone fingerprinted the host as
-// `I300S.crowncork.com` while every other probe failed.
+// `I300S.shop.local` while every other probe failed.
 //
 // Read-only by construction: a DNS PTR query is by definition a read.
 func MazakReverseDNS(ip string, timeout time.Duration) (*MazakIdentity, error) {
