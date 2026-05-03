@@ -736,6 +736,38 @@ func TestSMB2NegotiateRequest(t *testing.T) {
 	}
 }
 
+// TestMazakHostnameRegex_FQDNs validates that the hostname regex matches
+// PTR-record-style FQDNs (the input shape MazakReverseDNS sees from
+// net.LookupAddr). Real-world examples drawn from the user's deployment.
+func TestMazakHostnameRegex_FQDNs(t *testing.T) {
+	cases := []struct {
+		fqdn  string
+		match bool
+	}{
+		// Positive: real PTR records seen in the field.
+		{"I300S.crowncork.com", true},
+		{"I400S.crowncork.com", true},
+		{"INTEGREX-I400S.shopfloor.local", true},
+		{"MAZAK-NEXUS.acme.corp", true},
+		{"VCN-410.factory.internal", true},
+		{"qtn-250.shop.lan", true}, // case-insensitive
+		// Negative: ordinary corporate Windows hosts shouldn't match.
+		{"DC01.corp.acme.com", false},
+		{"WIN-J7K2L9.workgroup.local", false},
+		{"FILESERVER.shop.lan", false},
+		{"i7-7700-laptop.it.corp", false}, // Intel CPU pattern
+		{"i7000-srv.dc.local", false},     // 4-digit, not Mazak
+	}
+	for _, tc := range cases {
+		t.Run(tc.fqdn, func(t *testing.T) {
+			got := mazakHostnameRE.MatchString(tc.fqdn)
+			if got != tc.match {
+				t.Errorf("match(%q) = %v, want %v", tc.fqdn, got, tc.match)
+			}
+		})
+	}
+}
+
 // generateSelfSignedCert mints a self-signed ECDSA cert with the given
 // CommonName — mirrors what Windows RDP does at install time.
 func generateSelfSignedCert(t *testing.T, cn string) tls.Certificate {

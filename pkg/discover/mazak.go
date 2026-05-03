@@ -26,6 +26,7 @@
 package discover
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/xml"
@@ -853,6 +854,52 @@ func bytesIndex(s, sub []byte) int {
 // presents during the SSL upgrade handshake.
 const RDPPort = 3389
 
+// MazakReverseDNS performs a reverse DNS lookup against ip and matches any
+// returned PTR record against the Mazak hostname regex. This is the
+// cheapest, most resilient hostname surface in the entire probe set:
+//
+//   - Costs zero round-trips to the target — only the DNS resolver is
+//     queried.
+//   - Works through any firewall, including hosts where every TCP/UDP
+//     port is filtered by the controller's network ACL.
+//   - In managed enterprise networks (every shop floor connected to
+//     corporate IT), PTR records are populated automatically by DHCP/DDNS
+//     and reflect the Windows computer name.
+//
+// On a real-world Mazak Integrex i-300S deployment with port 3389 the
+// only reachable surface, this probe alone fingerprinted the host as
+// `I300S.crowncork.com` while every other probe failed.
+//
+// Read-only by construction: a DNS PTR query is by definition a read.
+func MazakReverseDNS(ip string, timeout time.Duration) (*MazakIdentity, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	names, err := net.DefaultResolver.LookupAddr(ctx, ip)
+	if err != nil || len(names) == 0 {
+		return nil, nil
+	}
+
+	for _, fqdn := range names {
+		fqdn = strings.TrimSuffix(strings.TrimSpace(fqdn), ".")
+		if fqdn == "" {
+			continue
+		}
+		if !mazakHostnameRE.MatchString(fqdn) {
+			continue
+		}
+		// Strip the domain part for Model — most consumers want the
+		// hostname proper (e.g. "I300S"), not the FQDN.
+		host := strings.SplitN(fqdn, ".", 2)[0]
+		return &MazakIdentity{
+			Model:  strings.ToUpper(host),
+			Banner: fmt.Sprintf("reverse DNS PTR=%s", fqdn),
+			Source: "dns",
+		}, nil
+	}
+	return nil, nil
+}
+
 // MazakRDP probes the RDP service on TCP/3389, performs the X.224 SSL
 // negotiation, and extracts the Common Name from the server's TLS
 // certificate. On Windows, the RDP service self-signs its certificate
@@ -984,19 +1031,25 @@ func rdpConnectionRequest() []byte {
 	return append(tpkt, cotp...)
 }
 
-// MazakProbe runs all seven Mazak fingerprints concurrently against ip and
+// MazakProbe runs all eight Mazak fingerprints concurrently against ip and
 // returns the first positive hit, with this precedence:
 //
-//	CIP (vendor=246) > NetBIOS UDP > SMB2 NTLMSSP > RDP TLS cert CN >
-//	MTConnect (manufacturer=Mazak) > HTTP (body match) > Port-shape (Firebird + Simple TCP/IP services)
+//	CIP (vendor=246) > Reverse DNS (PTR) > NetBIOS UDP > SMB2 NTLMSSP >
+//	RDP TLS cert CN > MTConnect > HTTP > Port-shape (Firebird + Simple TCP/IP services)
 //
-// CIP wins because vendor ID is canonical. NetBIOS UDP, SMB2 NTLMSSP, and
-// RDP TLS cert CN all extract the Windows hostname through different
-// surfaces — they're ordered by speed (UDP fast, SMB medium, RDP-TLS
-// slowest because it does a full TLS handshake) but each survives a
-// failure mode the previous one doesn't. RDP-TLS is the novel-to-deadband
-// path: works even when SMB anonymous auth is disabled, because the cert
-// is presented before any authentication exchange.
+// Reverse DNS sits high because it doesn't depend on any service being
+// reachable on the target — only on the DNS infrastructure having a PTR
+// record, which managed corporate networks always do. It's the right
+// answer for heavily-firewalled controllers where most TCP probes fail.
+//
+// CIP wins because vendor ID is canonical. Reverse DNS sits next because
+// it's free and works through every firewall. NetBIOS UDP, SMB2 NTLMSSP,
+// and RDP TLS cert CN all extract the Windows hostname through different
+// surfaces — they're ordered by speed and survive different failure
+// modes (UDP firewalled / SMB Kerberos-only / RDP requires TLS upgrade).
+// RDP-TLS is the novel-to-deadband path: works even when SMB anonymous
+// auth is disabled, because the cert is presented before any
+// authentication exchange.
 //
 // MTConnect carries an integrator-set manufacturer attribute. HTTP
 // body-match is a fallback for branded operator pages. Port-shape is the
@@ -1009,6 +1062,7 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 	var (
 		mu       sync.Mutex
 		cipID    *MazakIdentity
+		dnsID    *MazakIdentity
 		nbID     *MazakIdentity
 		smbID    *MazakIdentity
 		rdpID    *MazakIdentity
@@ -1030,6 +1084,22 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 				verbose(fmt.Sprintf("Mazak CIP probe (%s:%d): no Mazak identity", ip, EIPPort))
 			} else {
 				verbose(fmt.Sprintf("Mazak CIP probe (%s:%d): %s", ip, EIPPort, id.Banner))
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		id, _ := MazakReverseDNS(ip, timeout)
+		mu.Lock()
+		dnsID = id
+		mu.Unlock()
+		if verbose != nil {
+			if id == nil {
+				verbose(fmt.Sprintf("Mazak DNS probe (%s): no Mazak-pattern PTR record", ip))
+			} else {
+				verbose(fmt.Sprintf("Mazak DNS probe (%s): %s", ip, id.Banner))
 			}
 		}
 	}()
@@ -1138,6 +1208,8 @@ func MazakProbe(ip string, timeout time.Duration, verbose func(string)) *MazakId
 	switch {
 	case cipID != nil:
 		return cipID
+	case dnsID != nil:
+		return dnsID
 	case nbID != nil:
 		return nbID
 	case smbID != nil:
@@ -1186,6 +1258,8 @@ func mazakPortFor(id *MazakIdentity) int {
 		return EIPPort
 	case "netbios":
 		return NetBIOSPort
+	case "dns":
+		return 53
 	case "smb":
 		return SMBPort
 	case "rdp":
@@ -1207,7 +1281,7 @@ func mazakPortFor(id *MazakIdentity) int {
 // discoverMazak runs MazakProbe over a slice of IPs concurrently.
 func discoverMazak(ips []string, timeout time.Duration, concurrency int, progress func(string)) []inventory.Device {
 	if progress != nil {
-		progress(fmt.Sprintf("Mazak: probing %d host(s) — CIP/UDP %d, NetBIOS/UDP %d, SMB/TCP %d, RDP-TLS/TCP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
+		progress(fmt.Sprintf("Mazak: probing %d host(s) — reverse DNS, CIP/UDP %d, NetBIOS/UDP %d, SMB/TCP %d, RDP-TLS/TCP %d, MTConnect/TCP %v, HTTP/TCP 80, port-shape (Firebird/TCP %d + Simple TCP/IP services)",
 			len(ips), EIPPort, NetBIOSPort, SMBPort, RDPPort, mazakMTConnectPorts, FirebirdPort))
 	}
 
