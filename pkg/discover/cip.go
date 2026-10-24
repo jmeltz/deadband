@@ -42,7 +42,7 @@ type CIPIdentity struct {
 
 // vendorNames maps CIP vendor IDs to canonical vendor names. Source: ODVA
 // EtherNet/IP Vendor ID registry. Used by both the generic CIP scan path and
-// vendor-specific probes (e.g. Fanuc treats VendorID 252 as a positive hit).
+// vendor-specific probes (Fanuc uses VID 356 for Robotics and 591 for CNC).
 var vendorNames = map[uint16]string{
 	1:   "Rockwell Automation",
 	2:   "Neles (Metso)",
@@ -53,15 +53,22 @@ var vendorNames = map[uint16]string{
 	246: "Yamazaki Mazak",
 	266: "Schneider Electric",
 	283: "Siemens",
+	326: "Emerson / GE",
+	356: "Fanuc",
 	591: "Fanuc",
 	671: "Honeywell",
 }
 
-// FanucCIPVendorID is FANUC CORPORATION's ODVA EtherNet/IP Vendor ID.
-// Verified against a real Fanuc 32i EDS file: VendCode=591, VendName=
-// "FANUC CORPORATION". Used by the Fanuc-specific probe to confirm a CIP
-// responder is in fact a Fanuc controller.
+// FanucCIPVendorID is FANUC Ltd.'s ODVA EtherNet/IP Vendor ID (CNCs: 30i/31i/32i/0i).
 const FanucCIPVendorID uint16 = 591
+
+// FanucRoboticsCIPVendorID is Fanuc Robotics America's ODVA Vendor ID (R-30iA/R-30iB robots).
+const FanucRoboticsCIPVendorID uint16 = 356
+
+// IsFanucCIPVendorID reports whether vid belongs to FANUC CNC (591) or FANUC Robotics (356).
+func IsFanucCIPVendorID(vid uint16) bool {
+	return vid == FanucCIPVendorID || vid == FanucRoboticsCIPVendorID
+}
 
 // MazakCIPVendorID is Yamazaki Mazak Corporation's ODVA EtherNet/IP Vendor
 // ID per the ODVA registry. Used by the Mazak-specific probe to confirm a

@@ -17,7 +17,7 @@ import (
 // is owned by the deadband project; the file is regenerated on a regular
 // cadence from CISA's CSAF feed. When the snapshot is unreachable we fall
 // back to per-file fetch from cisagov/CSAF.
-const defaultSnapshotURL = "https://deadband.org/advisories.latest.json"
+const defaultSnapshotURL = "https://app.deadband.org/api/v1/advisories/snapshot"
 
 // snapshotHTTPTimeout caps any single snapshot fetch. Snapshots are small
 // (~tens of MB even at full CISA scope) and a 60s ceiling avoids wedging

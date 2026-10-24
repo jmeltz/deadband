@@ -1,11 +1,26 @@
-.PHONY: all deadband deadband-web deadband-web-windows web test vet clean
+.PHONY: all deadband release deadband-web deadband-web-windows web test vet clean
+
+VERSION ?= 0.6.0
+LDFLAGS := -s -w -X github.com/jmeltz/deadband/pkg/cli.Version=$(VERSION)
+BUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
 BINDIR := bin
 
 all: deadband
 
 deadband:
-	CGO_ENABLED=0 go build -o $(BINDIR)/deadband ./cmd/deadband/
+	$(BUILD) -o $(BINDIR)/deadband ./cmd/deadband/
+
+release:
+	@mkdir -p $(BINDIR)
+	GOOS=linux   GOARCH=amd64 $(BUILD) -o $(BINDIR)/deadband-linux-amd64       ./cmd/deadband/
+	GOOS=linux   GOARCH=arm64 $(BUILD) -o $(BINDIR)/deadband-linux-arm64       ./cmd/deadband/
+	GOOS=darwin  GOARCH=arm64 $(BUILD) -o $(BINDIR)/deadband-darwin-arm64      ./cmd/deadband/
+	GOOS=darwin  GOARCH=amd64 $(BUILD) -o $(BINDIR)/deadband-darwin-amd64      ./cmd/deadband/
+	GOOS=windows GOARCH=amd64 $(BUILD) -o $(BINDIR)/deadband-windows-amd64.exe ./cmd/deadband/
+	GOOS=windows GOARCH=arm64 $(BUILD) -o $(BINDIR)/deadband-windows-arm64.exe ./cmd/deadband/
+	@echo "built deadband v$(VERSION):"
+	@ls -lh $(BINDIR)/deadband-*
 
 web:
 	cd web && npm ci && npm run build

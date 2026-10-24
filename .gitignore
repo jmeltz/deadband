@@ -8,3 +8,4 @@ web/node_modules/
 web/.next/
 web/out/
 pkg/server/static/
+.vercel

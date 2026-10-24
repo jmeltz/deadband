@@ -47,10 +47,14 @@ func main() {
 		case "pcap":
 			runPCAP(os.Args[2:])
 			return
+		case "version":
+			fmt.Printf("deadband v%s\n", cli.Version)
+			return
 		}
 	}
 
 	var (
+		showVersion   bool
 		inventoryPath string
 		comparePath   string
 		inputFormat   string
@@ -84,6 +88,7 @@ func main() {
 		siteName        string
 	)
 
+	flag.BoolVar(&showVersion, "version", false, "Print build version and exit")
 	flag.StringVar(&inventoryPath, "inventory", "", "Path to device inventory file (CSV, JSON, or flat)")
 	flag.StringVar(&inventoryPath, "i", "", "Path to device inventory file (alias for --inventory)")
 	flag.StringVar(&comparePath, "compare", "", "Path to second inventory file for diff mode")
@@ -137,17 +142,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "OT asset inventory & vulnerability scanner\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
-		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices (CIP + S7 + Modbus) and check\n")
+		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices across 11 OT/CNC protocols and check\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
 		fmt.Fprintf(os.Stderr, "  deadband pcap <file>          Extract devices from pcap capture (passive)\n")
 		fmt.Fprintf(os.Stderr, "  deadband --serve              Start the web UI and API server\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
-		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n\n")
+		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n")
+		fmt.Fprintf(os.Stderr, "  deadband --version            Print build version\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
 
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("deadband v%s\n", cli.Version)
+		return
+	}
 
 	if serve {
 		srv, err := server.New(serveAddr, dbPath)

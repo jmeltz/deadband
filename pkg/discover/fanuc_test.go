@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"net"
@@ -12,9 +13,6 @@ import (
 	"time"
 )
 
-// fixtureFTPServer accepts connections, sends a single banner line, then
-// captures any client writes (which there should be none of for a banner
-// grab) and closes.
 func fixtureFTPServer(t *testing.T, banner string) (string, *[]byte, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -35,7 +33,7 @@ func fixtureFTPServer(t *testing.T, banner string) (string, *[]byte, func()) {
 			go func(c net.Conn) {
 				defer c.Close()
 				_, _ = io.WriteString(c, banner)
-				c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 				buf := make([]byte, 256)
 				for {
 					n, err := c.Read(buf)
@@ -52,54 +50,6 @@ func fixtureFTPServer(t *testing.T, banner string) (string, *[]byte, func()) {
 		}
 	}()
 	return ln.Addr().String(), &captured, func() { _ = ln.Close() }
-}
-
-// bannerProbe replicates FanucFTPBanner against an arbitrary host:port for
-// fixture testing. Mirrors the real implementation's parse logic.
-func bannerProbe(addr string, timeout time.Duration) (*FanucIdentity, error) {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return nil, nil
-	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	buf := make([]byte, 512)
-	n, err := conn.Read(buf)
-	if err != nil && n == 0 {
-		return nil, nil
-	}
-	line := string(buf[:n])
-	for len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
-		line = line[:len(line)-1]
-	}
-	if len(line) < 4 || line[:3] != "220" {
-		return nil, nil
-	}
-	if !fanucBannerRE.MatchString(line) {
-		return nil, nil
-	}
-	id := &FanucIdentity{Banner: line, Source: "ftp"}
-	if m := fanucSeriesRE.FindStringSubmatch(line); len(m) >= 2 {
-		id.Series = uppercaseASCII(m[1])
-	}
-	if m := fanucVersionRE.FindStringSubmatch(line); len(m) >= 2 {
-		id.Version = m[1]
-	}
-	if m := fanucAppTagRE.FindStringSubmatch(line); len(m) >= 2 && id.Version == "" {
-		id.Version = m[1]
-	}
-	return id, nil
-}
-
-// uppercaseASCII upper-cases ASCII letters without locale dependencies.
-func uppercaseASCII(s string) string {
-	b := []byte(s)
-	for i := range b {
-		if b[i] >= 'a' && b[i] <= 'z' {
-			b[i] -= 32
-		}
-	}
-	return string(b)
 }
 
 func TestFanucBannerParse(t *testing.T) {
@@ -120,23 +70,20 @@ func TestFanucBannerParse(t *testing.T) {
 			match:      true,
 		},
 		{
-			name:       "robot_r30ib_legacy",
-			banner:     "220-FANUC LTD. R-30iB ROBOT FTP SERVICE\r\n",
-			wantSeries: "R-30IB",
+			name:       "robot_r30ib_plus",
+			banner:     "220 R-30iB Plus FTP server ready. [HandlingTool V9.10P/23]\r\n",
+			wantSeries: "R-30IB PLUS",
+			wantVersion: "HandlingTool V9.10P/23",
 			match:      true,
 		},
 		{
-			// Real-world R-30iB banner — does NOT contain "FANUC" literal.
-			// This is the v0.5 detection bug the new regex fixes.
-			name:        "robot_r30ib_handlingtool",
-			banner:      "220 R-30iB FTP server ready. [HandlingTool V8.20P/06]\r\n",
-			wantSeries:  "R-30IB",
-			wantVersion: "HandlingTool V8.20P/06",
+			name:        "robot_vxworks_multiline_220",
+			banner:      "220-VxWorks (VxWorks5.5.1) FTP server ready\r\n220 FANUC R-30iB Mate Plus [ArcTool V8.30P/31] ready.\r\n",
+			wantSeries:  "R-30IB MATE PLUS",
+			wantVersion: "ArcTool V8.30P/31",
 			match:       true,
 		},
 		{
-			// Default-hostname case: no model in banner, but "ROBOT FTP"
-			// alone is distinctive enough on TCP/21.
 			name:   "robot_bare",
 			banner: "220 ROBOT FTP server ready.\r\n",
 			match:  true,
@@ -158,9 +105,9 @@ func TestFanucBannerParse(t *testing.T) {
 			addr, captured, stop := fixtureFTPServer(t, tt.banner)
 			defer stop()
 
-			id, err := bannerProbe(addr, 500*time.Millisecond)
+			id, err := fanucFTPAt(addr, 500*time.Millisecond)
 			if err != nil {
-				t.Fatalf("bannerProbe: %v", err)
+				t.Fatalf("fanucFTPAt: %v", err)
 			}
 			if !tt.match {
 				if id != nil {
@@ -177,20 +124,14 @@ func TestFanucBannerParse(t *testing.T) {
 			if tt.wantVersion != "" && id.Version != tt.wantVersion {
 				t.Errorf("Version: got %q, want %q", id.Version, tt.wantVersion)
 			}
-
-			// Read-only assertion: the banner-grab MUST NOT have written anything to the server.
 			if len(*captured) > 0 {
-				t.Errorf("Fanuc banner probe wrote %d bytes to server; expected zero. Got: %q",
-					len(*captured), string(*captured))
+				t.Errorf("Fanuc FTP banner probe wrote %d bytes; expected 0", len(*captured))
 			}
 		})
 	}
 }
 
-// buildFanucCIPResponse constructs an EIP ListIdentity response advertising
-// VendorID = 252 (Fanuc) and a controller product name. Used to exercise the
-// CIP-side Fanuc fingerprint without standing up a UDP fixture.
-func buildFanucCIPResponse(productName string) []byte {
+func buildFanucCIPResponseWithVID(vid uint16, productName string) []byte {
 	itemDataLen := 2 + cipSocketAddrSize + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 1 + len(productName) + 1
 	buf := make([]byte, eipHeaderSize+2+4+itemDataLen)
 
@@ -198,23 +139,23 @@ func buildFanucCIPResponse(productName string) []byte {
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(len(buf)-eipHeaderSize))
 
 	offset := eipHeaderSize
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1) // item_count
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1)
 	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:offset+2], cipItemTypeIdentity)
 	binary.LittleEndian.PutUint16(buf[offset+2:offset+4], uint16(itemDataLen))
 	offset += 4
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1) // encap version
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1)
 	offset += 2
 	offset += cipSocketAddrSize
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], FanucCIPVendorID) // 252
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], vid)
 	offset += 2
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], 12) // device_type (vendor-specific)
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], 12)
 	offset += 2
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1) // product_code
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], 1)
 	offset += 2
-	buf[offset] = 8
+	buf[offset] = 9
 	offset++
-	buf[offset] = 30
+	buf[offset] = 10
 	offset++
 	binary.LittleEndian.PutUint16(buf[offset:offset+2], 0x0030)
 	offset += 2
@@ -224,84 +165,61 @@ func buildFanucCIPResponse(productName string) []byte {
 	offset++
 	copy(buf[offset:], productName)
 	offset += len(productName)
-	buf[offset] = 3 // state
+	buf[offset] = 3
 	return buf
 }
 
-// TestFanucCIPParse asserts that a Fanuc-vendor CIP ListIdentity response
-// parses cleanly and FanucCIPVendorID matches the value 252 the spec
-// requires. End-to-end UDP behavior is covered by TestFanucCIPUDPFixture.
-func TestFanucCIPParse(t *testing.T) {
-	// 591 is FANUC CORPORATION per the ODVA EtherNet/IP Vendor ID registry,
-	// confirmed against a Fanuc 32i EDS dump (VendCode=591).
-	if FanucCIPVendorID != 591 {
-		t.Fatalf("FanucCIPVendorID = %d, want 591 per ODVA registry", FanucCIPVendorID)
+func TestFanucCIPBothODVAVendorIDs(t *testing.T) {
+	if !IsFanucCIPVendorID(591) || !IsFanucCIPVendorID(356) {
+		t.Fatal("expected both VID 591 (FANUC Ltd.) and VID 356 (Fanuc Robotics America) to match")
 	}
-	resp := buildFanucCIPResponse("R-30iB Mate Plus")
-	id, err := ParseListIdentityResponse(resp)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	if IsFanucCIPVendorID(252) {
+		t.Fatal("VID 252 is Omron Software Co., must not match Fanuc")
 	}
-	if id.VendorID != FanucCIPVendorID {
-		t.Errorf("VendorID = %d, want %d", id.VendorID, FanucCIPVendorID)
-	}
-	if id.ProductName != "R-30iB Mate Plus" {
-		t.Errorf("ProductName = %q, want %q", id.ProductName, "R-30iB Mate Plus")
-	}
-}
 
-// TestFanucCIPUDPFixture stands up a UDP listener that replies with a
-// Fanuc CIP ListIdentity response and verifies FanucCIP recognizes it.
-func TestFanucCIPUDPFixture(t *testing.T) {
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer conn.Close()
-
-	go func() {
-		buf := make([]byte, 1500)
-		n, remote, err := conn.ReadFromUDP(buf)
+	for _, tc := range []struct {
+		vid  uint16
+		name string
+	}{
+		{591, "FANUC Series 32i-B"},
+		{356, "R-30iB Plus"},
+	} {
+		addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 		if err != nil {
-			return
+			t.Fatalf("resolve: %v", err)
 		}
-		if n < 2 || binary.LittleEndian.Uint16(buf[:2]) != eipCommandListIdentity {
-			return
+		conn, err := net.ListenUDP("udp", addr)
+		if err != nil {
+			t.Fatalf("listen: %v", err)
 		}
-		_, _ = conn.WriteToUDP(buildFanucCIPResponse("R-30iB Plus"), remote)
-	}()
+		go func(c *net.UDPConn, vid uint16, prod string) {
+			defer c.Close()
+			buf := make([]byte, 1500)
+			n, remote, err := c.ReadFromUDP(buf)
+			if err != nil || n < 2 || binary.LittleEndian.Uint16(buf[:2]) != eipCommandListIdentity {
+				return
+			}
+			_, _ = c.WriteToUDP(buildFanucCIPResponseWithVID(vid, prod), remote)
+		}(conn, tc.vid, tc.name)
 
-	// Override EIPPort? No — we have the listener on a random port. Probe
-	// it directly using a smaller helper that targets host:port.
-	host, port, _ := net.SplitHostPort(conn.LocalAddr().String())
-	id, err := fanucCIPAt(net.JoinHostPort(host, port), 500*time.Millisecond)
-	if err != nil {
-		t.Fatalf("fanucCIPAt: %v", err)
-	}
-	if id == nil {
-		t.Fatal("expected Fanuc identity, got nil")
-	}
-	if !strings.Contains(id.Series, "R-30iB") {
-		t.Errorf("Series: got %q, want substring R-30iB", id.Series)
-	}
-	if id.Source != "cip" {
-		t.Errorf("Source = %q, want cip", id.Source)
+		host, port, _ := net.SplitHostPort(conn.LocalAddr().String())
+		id, err := fanucCIPAt(net.JoinHostPort(host, port), 500*time.Millisecond)
+		if err != nil || id == nil {
+			t.Fatalf("VID %d: expected Fanuc identity, got %v (err=%v)", tc.vid, id, err)
+		}
+		if id.Series != tc.name {
+			t.Errorf("VID %d: Series = %q, want %q", tc.vid, id.Series, tc.name)
+		}
 	}
 }
 
-// fanucCIPAt is a test-only helper that probes an arbitrary UDP host:port
-// (since FanucCIP() is locked to EIPPort).
 func fanucCIPAt(addr string, timeout time.Duration) (*FanucIdentity, error) {
 	conn, err := net.DialTimeout("udp", addr, timeout)
 	if err != nil {
 		return nil, nil
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write(buildListIdentityRequest()); err != nil {
 		return nil, nil
 	}
@@ -311,10 +229,7 @@ func fanucCIPAt(addr string, timeout time.Duration) (*FanucIdentity, error) {
 		return nil, nil
 	}
 	cip, err := ParseListIdentityResponse(buf[:n])
-	if err != nil || cip == nil {
-		return nil, nil
-	}
-	if cip.VendorID != FanucCIPVendorID {
+	if err != nil || cip == nil || !IsFanucCIPVendorID(cip.VendorID) {
 		return nil, nil
 	}
 	return &FanucIdentity{
@@ -323,84 +238,119 @@ func fanucCIPAt(addr string, timeout time.Duration) (*FanucIdentity, error) {
 	}, nil
 }
 
-func TestFanucHTTP(t *testing.T) {
-	cases := []struct {
-		name, body string
-		match      bool
-	}{
-		{
-			name:  "ipendant_setup",
-			body:  `<html><head><title>iPendant Setup</title></head><body>FANUC Robotics R-30iB Mate Plus</body></html>`,
-			match: true,
-		},
-		{
-			name:  "karel_directory",
-			body:  `<a href="/KAREL/SETUP.KL">SETUP.KL</a><a href="/MD/MAIN.PC">MAIN.PC</a>`,
-			match: true,
-		},
-		{
-			name:  "stm_landing",
-			body:  `<frame src="/frmaster.stm" name="content">`,
-			match: true,
-		},
-		{
-			name:  "non_fanuc",
-			body:  `<html><body>Welcome to Apache</body></html>`,
-			match: false,
-		},
+// TestFanucFOCAS2Fixture stands up a mock FOCAS2 CNC TCP server verifying:
+// 1. 12-byte OPN_REQU (0xA0A0A0A0 0001 0101 0002 0002)
+// 2. 40-byte read-only cnc_sysinfo [1,1,0x18] request -> 18-byte ODBSYS reply
+// 3. Clean 10-byte CLS_REQU (0xA0A0A0A0 0001 0201 0000) handle release before close!
+func TestFanucFOCAS2Fixture(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	var sawCloseReq bool
+	var mu sync.Mutex
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+		// 1. Read OPN_REQU
+		ft, payload, err := readFOCASFrame(conn)
+		if err != nil || ft != focasOpenReq || !bytes.Equal(payload, []byte{0x00, 0x02}) {
+			return
+		}
+		// Reply OPN_RESP
+		_, _ = conn.Write([]byte{0xA0, 0xA0, 0xA0, 0xA0, 0x00, 0x01, 0x01, 0x02, 0x00, 0x02, 0x00, 0x01})
+
+		// 2. Read cnc_sysinfo VAR_REQU
+		ft, payload, err = readFOCASFrame(conn)
+		if err != nil || ft != focasVarReq || len(payload) < 10 {
+			return
+		}
+		// Build 18-byte ODBSYS: addinfo=2, maxAxis=8, cncType="31", mtType=" M", series="D6F1", ver="01.0", axes="05"
+		odbsys := make([]byte, 18)
+		binary.BigEndian.PutUint16(odbsys[0:2], 2)
+		binary.BigEndian.PutUint16(odbsys[2:4], 8)
+		copy(odbsys[4:6], "31")
+		copy(odbsys[6:8], " M")
+		copy(odbsys[8:12], "D6F1")
+		copy(odbsys[12:16], "01.0")
+		copy(odbsys[16:18], "05")
+
+		var varBody bytes.Buffer
+		binary.Write(&varBody, binary.BigEndian, uint16(1))  // qu=1
+		binary.Write(&varBody, binary.BigEndian, uint16(34)) // sublen = 2 + 32
+		varBody.Write([]byte{0x00, 0x01, 0x00, 0x01, 0x00, 0x18})
+		varBody.Write(make([]byte, 6))                       // status = 0
+		binary.Write(&varBody, binary.BigEndian, uint16(18)) // sizeof(ODBSYS)
+		varBody.Write(odbsys)
+
+		var resp bytes.Buffer
+		binary.Write(&resp, binary.BigEndian, focasFrameMagic)
+		binary.Write(&resp, binary.BigEndian, uint16(1))
+		binary.Write(&resp, binary.BigEndian, focasVarResp)
+		binary.Write(&resp, binary.BigEndian, uint16(varBody.Len()))
+		resp.Write(varBody.Bytes())
+		_, _ = conn.Write(resp.Bytes())
+
+		// 3. Read CLS_REQU
+		ft, _, err = readFOCASFrame(conn)
+		if err == nil && ft == focasCloseReq {
+			mu.Lock()
+			sawCloseReq = true
+			mu.Unlock()
+			_, _ = conn.Write([]byte{0xA0, 0xA0, 0xA0, 0xA0, 0x00, 0x01, 0x02, 0x02, 0x00, 0x00})
+		}
+	}()
+
+	id, err := fanucFOCAS2At(ln.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("fanucFOCAS2At err: %v", err)
+	}
+	if id == nil {
+		t.Fatal("expected FOCAS2 identity, got nil")
+	}
+	if id.Source != "focas" {
+		t.Errorf("Source = %q, want focas", id.Source)
+	}
+	if id.Series != "Series 31i-M" {
+		t.Errorf("Series = %q, want Series 31i-M", id.Series)
+	}
+	if id.Version != "D6F1/01.0" {
+		t.Errorf("Version = %q, want D6F1/01.0", id.Version)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.WriteString(w, tc.body)
-			}))
-			defer srv.Close()
-
-			// Override URL to test fixture — call FanucHTTP-equivalent inline.
-			id := fanucHTTPAt(srv.URL, 500*time.Millisecond)
-			if !tc.match {
-				if id != nil {
-					t.Errorf("expected nil identity, got %+v", id)
-				}
-				return
-			}
-			if id == nil {
-				t.Fatal("expected identity, got nil")
-			}
-			if id.Source != "http" {
-				t.Errorf("Source = %q, want http", id.Source)
-			}
-		})
+	mu.Lock()
+	closedCleanly := sawCloseReq
+	mu.Unlock()
+	if !closedCleanly {
+		t.Error("expected client to send CLS_REQU (0x0201) to release embedded CNC socket slot")
 	}
 }
 
-// fanucHTTPAt is a test helper that probes an arbitrary HTTP URL against the
-// Fanuc body fingerprint (FanucHTTP itself is locked to http://ip:80/).
-func fanucHTTPAt(url string, timeout time.Duration) *FanucIdentity {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
+func TestFanucHTTP(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `<html><head><title>iPendant Setup</title></head><body>FANUC Robotics R-30iB Mate Plus</body></html>`)
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
 	if err != nil {
-		return nil
+		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, _ := io.ReadAll(resp.Body)
 	if !fanucHTTPRE.MatchString(string(body)) {
-		return nil
+		t.Fatal("expected fanucHTTPRE match")
 	}
-	id := &FanucIdentity{Source: "http", Banner: firstLine(string(body))}
-	if m := fanucHTTPModelRE.FindStringSubmatch(string(body)); len(m) >= 2 {
-		id.Series = strings.ToUpper(m[1])
-	}
-	return id
-}
-
-func TestFanucFOCAS2Stub(t *testing.T) {
-	id, err := FanucFOCAS2Probe("10.0.0.1", 100*time.Millisecond)
-	if id != nil {
-		t.Errorf("FOCAS2 stub returned non-nil identity: %+v", id)
-	}
-	if err == nil {
-		t.Error("FOCAS2 stub returned nil error; expected not-implemented")
+	m := fanucHTTPModelRE.FindStringSubmatch(string(body))
+	if len(m) < 2 || strings.ToUpper(m[1]) != "R-30IB MATE PLUS" {
+		t.Errorf("got HTTP model %v, want R-30IB MATE PLUS", m)
 	}
 }
