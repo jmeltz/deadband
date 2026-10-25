@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +130,7 @@ func discoverOPCUA(ips []string, timeout time.Duration, concurrency int, progres
 // opcuaGetEndpoints performs the OPC UA handshake and GetEndpoints call.
 // Sequence: Hello → Ack → OpenSecureChannel → GetEndpoints
 func opcuaGetEndpoints(ip string, timeout time.Duration) (*OPCUAIdentity, error) {
-	addr := fmt.Sprintf("%s:%d", ip, OPCUAPort)
+	addr := net.JoinHostPort(ip, strconv.Itoa(OPCUAPort))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err
@@ -137,7 +138,7 @@ func opcuaGetEndpoints(ip string, timeout time.Duration) (*OPCUAIdentity, error)
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(timeout * 3))
 
-	endpointURL := fmt.Sprintf("opc.tcp://%s:%d", ip, OPCUAPort)
+	endpointURL := fmt.Sprintf("opc.tcp://%s", addr)
 
 	// 1. Send Hello
 	if err := opcuaSendHello(conn, endpointURL); err != nil {
