@@ -1,11 +1,10 @@
-//go:build bacnet
-
 package discover
 
 import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,10 +44,13 @@ const (
 	objTypeDevice = 8
 
 	// Property IDs
-	propFirmwareRevision = 44
-	propModelName        = 70
-	propVendorIdentifier = 120
-	propVendorName       = 121
+	propAppSoftwareVersion = 12
+	propFirmwareRevision   = 44
+	propLocation           = 58
+	propModelName          = 70
+	propObjectName         = 77
+	propVendorIdentifier   = 120
+	propVendorName         = 121
 )
 
 // BACnetIdentity holds parsed identity from BACnet Who-Is/ReadProperty responses.
@@ -57,6 +59,8 @@ type BACnetIdentity struct {
 	VendorName       string
 	ModelName        string
 	FirmwareRevision string
+	ObjectName       string
+	Location         string
 	DeviceInstance   uint32
 }
 
@@ -315,14 +319,34 @@ func parseApplicationValue(data []byte) (string, error) {
 // used in the CISA advisory database.
 var bacnetVendorMap = map[uint16]string{
 	5:   "Johnson Controls",
+	7:   "Siemens",
+	8:   "Delta Controls",
+	10:  "Schneider Electric",
 	15:  "Honeywell",
+	17:  "Honeywell",
+	18:  "Honeywell",
 	24:  "Delta Controls",
+	26:  "Carrier",
+	36:  "Trane",
+	53:  "Daikin",
 	66:  "Trane",
+	77:  "CAREL",
 	85:  "Carrier",
 	95:  "Distech Controls",
+	107: "Copeland",
+	115: "Vertiv",
+	138: "Danfoss",
+	178: "LOYTEC",
+	186: "Daikin",
+	199: "Mitsubishi Electric",
 	222: "Daikin",
+	270: "ABB",
+	274: "WAGO",
+	299: "Beckhoff",
 	343: "Schneider Electric",
+	364: "Distech Controls",
 	404: "Siemens",
+	423: "Belimo",
 	555: "Automated Logic",
 }
 
@@ -392,13 +416,53 @@ func BACnetIdentify(ip string, timeout time.Duration) (*BACnetIdentity, error) {
 		}
 	}
 
-	// Phase 3: ReadProperty for firmware-revision (property 44)
+	// Phase 3: ReadProperty for firmware-revision (property 44), fallback to application-software-version (12)
 	conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write(buildReadPropertyRequest(2, deviceInstance, propFirmwareRevision)); err == nil {
 		n, err = conn.Read(buf)
 		if err == nil {
 			if val, err := parseReadPropertyResponse(buf[:n]); err == nil {
-				id.FirmwareRevision = val
+				id.FirmwareRevision = strings.TrimSpace(val)
+			}
+		}
+	}
+	if id.FirmwareRevision == "" {
+		conn.SetDeadline(time.Now().Add(timeout))
+		if _, err := conn.Write(buildReadPropertyRequest(3, deviceInstance, propAppSoftwareVersion)); err == nil {
+			if n, err = conn.Read(buf); err == nil {
+				if val, err := parseReadPropertyResponse(buf[:n]); err == nil {
+					id.FirmwareRevision = strings.TrimSpace(val)
+				}
+			}
+		}
+	}
+
+	// Phase 4: If vendorID was not mapped in bacnetVendorMap, read vendor-name (property 121)
+	if strings.HasPrefix(id.VendorName, "BACnet Vendor ") {
+		conn.SetDeadline(time.Now().Add(timeout))
+		if _, err := conn.Write(buildReadPropertyRequest(4, deviceInstance, propVendorName)); err == nil {
+			if n, err = conn.Read(buf); err == nil {
+				if val, err := parseReadPropertyResponse(buf[:n]); err == nil && strings.TrimSpace(val) != "" {
+					id.VendorName = strings.TrimSpace(val)
+				}
+			}
+		}
+	}
+
+	// Phase 5: Read object-name (77) + location (58) for cyber-physical context enrichment
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(buildReadPropertyRequest(5, deviceInstance, propObjectName)); err == nil {
+		if n, err = conn.Read(buf); err == nil {
+			if val, err := parseReadPropertyResponse(buf[:n]); err == nil {
+				id.ObjectName = strings.TrimSpace(val)
+			}
+		}
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(buildReadPropertyRequest(6, deviceInstance, propLocation)); err == nil {
+		if n, err = conn.Read(buf); err == nil {
+			if val, err := parseReadPropertyResponse(buf[:n]); err == nil {
+				id.Location = strings.TrimSpace(val)
 			}
 		}
 	}
@@ -408,13 +472,23 @@ func BACnetIdentify(ip string, timeout time.Duration) (*BACnetIdentity, error) {
 
 // BACnetIdentityToDevice converts a BACnetIdentity to an inventory.Device.
 func BACnetIdentityToDevice(ip string, id *BACnetIdentity) inventory.Device {
+	model := strings.TrimSpace(id.ModelName)
+	if model == "" {
+		model = fmt.Sprintf("BACnet Device #%d", id.DeviceInstance)
+	}
+	var extra map[string]string
+	if id.Location != "" {
+		extra = map[string]string{"location": id.Location}
+	}
 	return inventory.Device{
 		IP:       ip,
 		Vendor:   id.VendorName,
-		Model:    id.ModelName,
+		Model:    model,
 		Firmware: id.FirmwareRevision,
+		Hostname: id.ObjectName,
 		Protocol: "bacnet",
 		Port:     BACnetPort,
+		Extra:    extra,
 	}
 }
 

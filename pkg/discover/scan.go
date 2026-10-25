@@ -17,8 +17,11 @@ const (
 	BACnetPort    = 47808
 	FINSPort      = 9600
 	SRTPPort      = 18245
-	OPCUAPort     = 4840
-	HaasPort       = 5051 // Haas NGC Q-command interface
+	OPCUAPort      = 4840
+	ADSPort        = 48898 // Beckhoff TwinCAT AMS/ADS TCP
+	SICKPortA      = 2111  // SICK SOPAS CoLa-A / CoLa-B Aux
+	SICKPortB      = 2112  // SICK SOPAS CoLa-A / CoLa-B Host
+	HaasPort       = 5051  // Haas NGC Q-command interface
 	FanucFTPPort   = 21   // Fanuc CNC & robot controllers expose an FTP server with a fingerprintable banner
 	FanucFOCASPort = 8193 // Fanuc CNC FOCAS2 embedded Ethernet interface
 )

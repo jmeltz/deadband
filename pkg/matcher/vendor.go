@@ -8,7 +8,7 @@ var vendorAliases = map[string][]string{
 	// --- Major PLC / DCS vendors ---
 	"Rockwell Automation": {"rockwell", "allen-bradley", "a-b", "ra", "rockwell automation"},
 	"Siemens":             {"siemens", "siemens ag", "simens"},
-	"Schneider Electric":  {"schneider", "schneider electric", "se", "schneider electric software, llc", "schneider electric software"},
+	"Schneider Electric":  {"schneider", "schneider electric", "se", "schneider electric software, llc", "schneider electric software", "apc", "apc by schneider electric", "american power conversion"},
 	"ABB":                 {"abb", "abb ltd"},
 	"Mitsubishi Electric": {"mitsubishi", "mitsubishi electric", "mitsubishi electric corporation", "mitsubishi electric europe b.v.", "mitsubishi electric india", "m700", "m800", "m80", "e80"},
 	"Emerson / GE":        {"emerson", "emerson electric", "ge", "general electric", "ge digital", "ge vernova", "emerson / ge", "general electric (ge)", "ge healthcare", "emerson process management", "general electric (ge) and emerson"},
@@ -16,29 +16,52 @@ var vendorAliases = map[string][]string{
 	"Yokogawa":            {"yokogawa", "yokogawa electric"},
 	"Omron":               {"omron", "omron corporation"},
 
-	// --- Power / energy ---
+	// --- Power / energy / critical server-room thermal & UPS ---
 	"Hitachi Energy": {"hitachi energy"},
 	"Eaton":          {"eaton", "eaton cooper power systems", "eaton's cooper", "cooper power systems"},
+	"Vertiv":         {"vertiv", "vertiv co", "liebert", "emerson network power", "avocent"},
+	"Rittal":         {"rittal", "rittal gmbh", "rittal gmbh & co. kg"},
 
-	// --- Building automation ---
+	// --- Building automation & cold-chain refrigeration / EMS ---
 	"Trane":            {"trane", "trane technologies"},
 	"Johnson Controls": {"johnson controls", "jci", "johnson controls inc.", "johnson controls inc", "johnson controls, inc."},
 	"Carrier":          {"carrier", "carrier lenels2"},
+	"Danfoss":          {"danfoss", "danfoss a/s", "danfoss power solutions"},
+	"CAREL":            {"carel", "carel industries", "carel industries s.p.a."},
+	"Copeland":         {"copeland", "copeland lp", "dixell", "emerson retail solutions", "emerson climate technologies"},
+	"Vaisala":          {"vaisala", "vaisala oyj", "veriteq"},
+	"Testo":            {"testo", "testo se", "testo se & co. kgaa"},
+	"ELPRO":            {"elpro", "elpro-buchs", "elpro-buchs ag"},
+	"Sensaphone":       {"sensaphone"},
+	"Rees Scientific":  {"rees scientific", "rees"},
 
-	// --- Field devices / IO ---
-	"Phoenix Contact":  {"phoenix contact", "phoenix", "innominate", "phoenix contact software", "innominate security technologies"},
-	"Moxa":             {"moxa"},
-	"WAGO":             {"wago", "wago kontakttechnik"},
+	// --- Field devices / IO / Auto-ID / Intralogistics ---
+	"Phoenix Contact":   {"phoenix contact", "phoenix", "innominate", "phoenix contact software", "innominate security technologies"},
+	"Moxa":              {"moxa"},
+	"WAGO":              {"wago", "wago kontakttechnik"},
 	"Delta Electronics": {"delta", "delta electronics"},
-	"Beckhoff":         {"beckhoff", "beckhoff automation"},
-	"Festo":            {"festo", "festo didactic", "festo didactic se"},
+	"Beckhoff":          {"beckhoff", "beckhoff automation", "beckhoff automation gmbh"},
+	"Festo":             {"festo", "festo didactic", "festo didactic se"},
+	"KNAPP":             {"knapp", "knapp ag", "knapp logistik", "kisoft", "apostore"},
+	"Swisslog":          {"swisslog", "swisslog healthcare", "swisslog logistics"},
+	"Dematic":           {"dematic", "kion", "dematic corp"},
+	"SICK":              {"sick", "sick ag"},
+	"Cognex":            {"cognex", "cognex corporation"},
+	"Pilz":              {"pilz", "pilz gmbh", "pilz gmbh & co. kg"},
+	"TURCK":             {"turck", "hans turck", "hans turck gmbh"},
+	"Zebra":             {"zebra", "zebra technologies"},
+	"SEW-EURODRIVE":     {"sew-eurodrive", "sew eurodrive", "sew-eurodrive gmbh"},
+	"LOYTEC":            {"loytec", "loytec electronics"},
+	"Belimo":            {"belimo"},
+	"Distech Controls":  {"distech", "distech controls"},
+	"Daikin":            {"daikin", "daikin applied"},
 
 	// --- Industrial IoT / edge ---
 	"Advantech": {"advantech", "advantech/broadwin", "advantech/browin"},
 
 	// --- Drives / motion ---
 	"Fuji Electric": {"fuji electric"},
-	"B&R":           {"b&r", "b&r industrial automation"},
+	"B&R":           {"b&r", "b&r industrial automation", "abb b&r", "bernecker + rainer", "bernecker & rainer"},
 
 	// --- SCADA / HMI software (Schneider ecosystem) ---
 	"AVEVA":   {"aveva", "aveva software, llc", "aveva software", "osisoft", "osisoft llc", "invensys", "indusoft"},
@@ -67,6 +90,37 @@ var vendorPatterns = []struct {
 	pattern   string
 	canonical string
 }{
+	{"american power conversion", "Schneider Electric"},
+	{"apc by schneider", "Schneider Electric"},
+	{"emerson network power", "Vertiv"},
+	{"emerson retail solutions", "Copeland"},
+	{"emerson climate", "Copeland"},
+	{"abb b&r", "B&R"},
+	{"b&r industrial", "B&R"},
+	{"bernecker", "B&R"},
+	{"sew-eurodrive", "SEW-EURODRIVE"},
+	{"sew eurodrive", "SEW-EURODRIVE"},
+	{"rees scientific", "Rees Scientific"},
+	{"swisslog", "Swisslog"},
+	{"dematic", "Dematic"},
+	{"knapp", "KNAPP"},
+	{"kisoft", "KNAPP"},
+	{"danfoss", "Danfoss"},
+	{"copeland", "Copeland"},
+	{"dixell", "Copeland"},
+	{"carel", "CAREL"},
+	{"vaisala", "Vaisala"},
+	{"testo", "Testo"},
+	{"elpro", "ELPRO"},
+	{"sensaphone", "Sensaphone"},
+	{"vertiv", "Vertiv"},
+	{"liebert", "Vertiv"},
+	{"rittal", "Rittal"},
+	{"cognex", "Cognex"},
+	{"zebra", "Zebra"},
+	{"sick ag", "SICK"},
+	{"turck", "TURCK"},
+	{"pilz", "Pilz"},
 	{"schneider electric", "Schneider Electric"},
 	{"johnson controls", "Johnson Controls"},
 	{"phoenix contact", "Phoenix Contact"},

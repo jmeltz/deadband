@@ -315,6 +315,20 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		mode = discover.ModeFINS
 	case "srtp":
 		mode = discover.ModeSRTP
+	case "opcua":
+		mode = discover.ModeOPCUA
+	case "ads":
+		mode = discover.ModeADS
+	case "sick":
+		mode = discover.ModeSICK
+	case "ancillary":
+		mode = discover.ModeAncillary
+	case "haas":
+		mode = discover.ModeHaas
+	case "fanuc":
+		mode = discover.ModeFanuc
+	case "mazak":
+		mode = discover.ModeMazak
 	case "http":
 		mode = discover.ModeLegacyHTTP
 	}

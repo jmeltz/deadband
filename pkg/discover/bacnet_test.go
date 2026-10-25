@@ -1,5 +1,3 @@
-//go:build bacnet
-
 package discover
 
 import (

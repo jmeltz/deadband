@@ -1,6 +1,6 @@
 .PHONY: all deadband release deadband-web deadband-web-windows web test vet clean
 
-VERSION ?= 0.6.0
+VERSION ?= 0.7.0
 LDFLAGS := -s -w -X github.com/jmeltz/deadband/pkg/cli.Version=$(VERSION)
 BUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 

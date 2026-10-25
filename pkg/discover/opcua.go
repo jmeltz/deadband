@@ -24,6 +24,11 @@ type OPCUAIdentity struct {
 // opcuaIdentityToDevice converts an OPCUAIdentity to an inventory Device.
 func opcuaIdentityToDevice(ip string, id *OPCUAIdentity) inventory.Device {
 	vendor := opcuaVendorFromURI(id.ProductURI)
+	if vendor == "Unknown" || vendor == id.ProductURI {
+		if alt := opcuaVendorFromURI(id.ApplicationURI + " " + id.ApplicationName); alt != "Unknown" && alt != id.ApplicationURI+" "+id.ApplicationName {
+			vendor = alt
+		}
+	}
 	model := id.ApplicationName
 	if model == "" {
 		model = id.ProductURI
@@ -39,13 +44,33 @@ func opcuaIdentityToDevice(ip string, id *OPCUAIdentity) inventory.Device {
 	}
 }
 
-// opcuaVendorFromURI maps ProductURI patterns to vendor names.
+// opcuaVendorFromURI maps ProductURI / ApplicationURI / ApplicationName patterns to vendor names.
 func opcuaVendorFromURI(uri string) string {
 	u := strings.ToLower(uri)
 	switch {
+	case strings.Contains(u, "knapp") || strings.Contains(u, "kisoft") || strings.Contains(u, "apostore"):
+		return "KNAPP"
+	case strings.Contains(u, "swisslog") || strings.Contains(u, "synq") || strings.Contains(u, "translogic"):
+		return "Swisslog"
+	case strings.Contains(u, "dematic"):
+		return "Dematic"
+	case strings.Contains(u, "vaisala") || strings.Contains(u, "viewlinc"):
+		return "Vaisala"
+	case strings.Contains(u, "sick") || strings.Contains(u, "sopas"):
+		return "SICK"
+	case strings.Contains(u, "cognex"):
+		return "Cognex"
+	case strings.Contains(u, "danfoss"):
+		return "Danfoss"
+	case strings.Contains(u, "carel"):
+		return "CAREL"
+	case strings.Contains(u, "copeland") || strings.Contains(u, "dixell"):
+		return "Copeland"
+	case strings.Contains(u, "sew-eurodrive"):
+		return "SEW-EURODRIVE"
 	case strings.Contains(u, "siemens"):
 		return "Siemens"
-	case strings.Contains(u, "beckhoff"):
+	case strings.Contains(u, "beckhoff") || strings.Contains(u, "twincat"):
 		return "Beckhoff"
 	case strings.Contains(u, "b&r") || strings.Contains(u, "br-automation"):
 		return "B&R"

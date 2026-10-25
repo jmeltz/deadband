@@ -21,6 +21,9 @@ const (
 	ModeFINS       DiscoveryMode = "fins"
 	ModeSRTP       DiscoveryMode = "srtp"
 	ModeOPCUA      DiscoveryMode = "opcua"
+	ModeADS        DiscoveryMode = "ads"
+	ModeSICK       DiscoveryMode = "sick"
+	ModeAncillary  DiscoveryMode = "ancillary"
 	ModeHaas       DiscoveryMode = "haas"
 	ModeFanuc      DiscoveryMode = "fanuc"
 	ModeMazak      DiscoveryMode = "mazak"
@@ -66,6 +69,12 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runSRTP(opts, ips)
 	case ModeOPCUA:
 		return runOPCUA(opts, ips)
+	case ModeADS:
+		return runADS(opts, ips)
+	case ModeSICK:
+		return runSICK(opts, ips)
+	case ModeAncillary:
+		return runAncillary(opts, ips)
 	case ModeHaas:
 		return runHaas(opts, ips)
 	case ModeFanuc:
@@ -239,9 +248,51 @@ func runMazak(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runADS(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Beckhoff TwinCAT ADS discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverADS(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("TwinCAT ADS discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
+func runSICK(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("SICK SOPAS CoLa discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverSICK(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("SICK SOPAS discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
+func runAncillary(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Ancillary Cold-Chain / WCS / HVAC HTTP+TLS discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverAncillary(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Ancillary HTTP+TLS discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + MELSEC + FINS + SRTP + OPC UA + Haas + Fanuc + Mazak) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + BACnet + OPC UA + ADS + SICK + MELSEC + FINS + SRTP + Haas + Fanuc + Mazak + Ancillary) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -252,10 +303,14 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	cipCh := make(chan result, 1)
 	s7Ch := make(chan result, 1)
 	modbusCh := make(chan result, 1)
+	bacnetCh := make(chan result, 1)
 	melsecCh := make(chan result, 1)
 	finsCh := make(chan result, 1)
 	srtpCh := make(chan result, 1)
 	opcuaCh := make(chan result, 1)
+	adsCh := make(chan result, 1)
+	sickCh := make(chan result, 1)
+	ancillaryCh := make(chan result, 1)
 	haasCh := make(chan result, 1)
 	fanucCh := make(chan result, 1)
 	mazakCh := make(chan result, 1)
@@ -271,6 +326,10 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	go func() {
 		d, e := runModbusTCP(opts, ips)
 		modbusCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runBACnet(opts, ips)
+		bacnetCh <- result{d, e}
 	}()
 	go func() {
 		d, e := runMELSEC(opts, ips)
@@ -289,6 +348,18 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		opcuaCh <- result{d, e}
 	}()
 	go func() {
+		d, e := runADS(opts, ips)
+		adsCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runSICK(opts, ips)
+		sickCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runAncillary(opts, ips)
+		ancillaryCh <- result{d, e}
+	}()
+	go func() {
 		d, e := runHaas(opts, ips)
 		haasCh <- result{d, e}
 	}()
@@ -304,62 +375,49 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	cipResult := <-cipCh
 	s7Result := <-s7Ch
 	modbusResult := <-modbusCh
+	bacnetResult := <-bacnetCh
 	melsecResult := <-melsecCh
 	finsResult := <-finsCh
 	srtpResult := <-srtpCh
 	opcuaResult := <-opcuaCh
+	adsResult := <-adsCh
+	sickResult := <-sickCh
+	ancillaryResult := <-ancillaryCh
 	haasResult := <-haasCh
 	fanucResult := <-fanucCh
 	mazakResult := <-mazakCh
 
-	// Merge results, deduplicate by IP (prefer result with non-empty Model)
+	// Merge results, deduplicate by IP (prefer structured OT identities first, then Ancillary HTTP+TLS)
 	seen := make(map[string]inventory.Device)
-	for _, d := range cipResult.devices {
-		seen[d.IP] = d
+	mergeList := [][]inventory.Device{
+		cipResult.devices,
+		s7Result.devices,
+		modbusResult.devices,
+		bacnetResult.devices,
+		opcuaResult.devices,
+		adsResult.devices,
+		sickResult.devices,
+		melsecResult.devices,
+		finsResult.devices,
+		srtpResult.devices,
+		haasResult.devices,
+		fanucResult.devices,
+		mazakResult.devices,
+		ancillaryResult.devices,
 	}
-	for _, d := range s7Result.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range modbusResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range melsecResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range finsResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range srtpResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range opcuaResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range haasResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range fanucResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
-		}
-	}
-	for _, d := range mazakResult.devices {
-		if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-			seen[d.IP] = d
+	for _, list := range mergeList {
+		for _, d := range list {
+			if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
+				seen[d.IP] = d
+			} else {
+				if existing.Firmware == "" && d.Firmware != "" {
+					existing.Firmware = d.Firmware
+				}
+				if existing.Hostname == "" && d.Hostname != "" {
+					existing.Hostname = d.Hostname
+				}
+				seen[d.IP] = existing
+			}
 		}
 	}
 
