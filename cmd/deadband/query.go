@@ -72,6 +72,9 @@ func runQuery(args []string) error {
 		if *dryRun {
 			return writeQueryJSON(*output, p)
 		}
+		if p.Profile == query.ProfileModbusIdentityTCP {
+			return fmt.Errorf("the Modbus identity profile is available through Cloud lab validation")
+		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		r, err := query.Execute(ctx, p)

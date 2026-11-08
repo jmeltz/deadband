@@ -24,7 +24,14 @@ func TestExecutableRegistryMatchesActualEngine(t *testing.T) {
 			continue
 		}
 		executable++
-		plan, err := query.NewPlan([]query.Target{{AssetID: "registry-check", IP: "192.0.2.1", Port: p.Transports[0].Port, RequestedFields: p.RequestedFields}}, "enrich")
+		var plan query.Plan
+		var err error
+		if p.WireProfileID == query.ProfileModbusIdentityTCP {
+			unit := 255
+			plan, err = query.NewModbusLabPlan(query.Target{AssetID: "registry-check", IP: "192.0.2.1", Port: p.Transports[0].Port, UnitID: &unit, RequestedFields: p.RequestedFields})
+		} else {
+			plan, err = query.NewPlan([]query.Target{{AssetID: "registry-check", IP: "192.0.2.1", Port: p.Transports[0].Port, RequestedFields: p.RequestedFields}}, "enrich")
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +44,7 @@ func TestExecutableRegistryMatchesActualEngine(t *testing.T) {
 			t.Fatalf("registry advertises unsupported profile: %v", err)
 		}
 	}
-	if executable != 1 {
+	if executable != 2 {
 		t.Fatalf("unexpected executable profile count %d", executable)
 	}
 	var a, b bytes.Buffer

@@ -1,6 +1,6 @@
 {
   "engine_package": "github.com/jmeltz/deadband/pkg/query",
-  "engine_version": "v0.8.0",
+  "engine_version": "v0.9.0",
   "profiles": [
     {
       "device_validation_required": true,
@@ -29,15 +29,27 @@
     },
     {
       "device_validation_required": true,
-      "executable": false,
+      "executable": true,
       "key": "modbus_known_unit",
       "name": "Modbus identification at a known unit",
       "protocol": "modbus",
-      "requested_fields": [],
-      "schema_versions": [],
-      "status": "planned",
-      "transports": [],
-      "validation": "not_implemented"
+      "requested_fields": [
+        "vendor",
+        "product_code",
+        "identity_revision"
+      ],
+      "schema_versions": [
+        2
+      ],
+      "status": "lab",
+      "transports": [
+        {
+          "port": 502,
+          "transport": "tcp"
+        }
+      ],
+      "validation": "protocol_contract_and_loopback",
+      "wire_profile_id": "modbus-device-id-basic-tcp-v1"
     },
     {
       "device_validation_required": true,
@@ -90,8 +102,9 @@
   ],
   "registry_version": 1,
   "source_package": "github.com/jmeltz/deadband/pkg/capability",
-  "source_version": "v0.8.1",
+  "source_version": "v0.9.0",
   "wire_schema_versions": [
-    1
+    1,
+    2
   ]
 }

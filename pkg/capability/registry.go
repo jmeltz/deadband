@@ -42,9 +42,9 @@ type Endpoint struct {
 // another request. Stable means a shipped executable contract; Lab is a product
 // validation workflow, not an alternative wire profile or maturity guarantee.
 func Current() Registry {
-	profiles := []Profile{{Key: "enip_identity_tcp", Name: "EtherNet/IP endpoint identity", Protocol: "enip", Status: "stable", Executable: true, WireProfileID: query.ProfileENIPIdentityTCP, SchemaVersions: []int{query.SchemaVersion}, Transports: []Endpoint{{Transport: "tcp", Port: 44818}}, RequestedFields: []string{"vendor", "model", "firmware", "serial"}, Validation: "protocol_contract_and_loopback", DeviceValidationRequired: true}}
+	profiles := []Profile{{Key: "enip_identity_tcp", Name: "EtherNet/IP endpoint identity", Protocol: "enip", Status: "stable", Executable: true, WireProfileID: query.ProfileENIPIdentityTCP, SchemaVersions: []int{query.SchemaVersion}, Transports: []Endpoint{{Transport: "tcp", Port: 44818}}, RequestedFields: []string{"vendor", "model", "firmware", "serial"}, Validation: "protocol_contract_and_loopback", DeviceValidationRequired: true},
+		{Key: "modbus_known_unit", Name: "Modbus identification at a known unit", Protocol: "modbus", Status: "lab", Executable: true, WireProfileID: query.ProfileModbusIdentityTCP, SchemaVersions: []int{2}, Transports: []Endpoint{{Transport: "tcp", Port: 502}}, RequestedFields: []string{"vendor", "product_code", "identity_revision"}, Validation: "protocol_contract_and_loopback", DeviceValidationRequired: true}}
 	for _, p := range []struct{ key, name, protocol string }{
-		{"modbus_known_unit", "Modbus identification at a known unit", "modbus"},
 		{"s7_known_tsap", "S7 identification at a known TSAP", "s7"},
 		{"bacnet_known_instance", "BACnet identification at a known device instance", "bacnet"},
 		{"ads_device_info", "Route-less ADS device information", "ads"},
@@ -52,7 +52,7 @@ func Current() Registry {
 	} {
 		profiles = append(profiles, Profile{Key: p.key, Name: p.name, Protocol: p.protocol, Status: "planned", Executable: false, SchemaVersions: []int{}, Transports: []Endpoint{}, RequestedFields: []string{}, Validation: "not_implemented", DeviceValidationRequired: true})
 	}
-	return Registry{RegistryVersion: 1, SourcePackage: "github.com/jmeltz/deadband/pkg/capability", SourceVersion: "v0.8.1", EnginePackage: "github.com/jmeltz/deadband/pkg/query", EngineVersion: "v0.8.0", WireSchemaVersions: []int{query.SchemaVersion}, Profiles: profiles}
+	return Registry{RegistryVersion: 1, SourcePackage: "github.com/jmeltz/deadband/pkg/capability", SourceVersion: "v0.9.0", EnginePackage: "github.com/jmeltz/deadband/pkg/query", EngineVersion: "v0.9.0", WireSchemaVersions: []int{query.SchemaVersion, 2}, Profiles: profiles}
 }
 
 // Write emits deterministic JSON with sorted object keys and a final newline.

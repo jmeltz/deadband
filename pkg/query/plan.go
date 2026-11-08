@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	SchemaVersion          = 1
-	ProfileENIPIdentityTCP = "enip-identity-tcp-v1"
-	MaxTargets             = 256
-	MaxResponseBytes       = 4096
+	SchemaVersion            = 1
+	ProfileENIPIdentityTCP   = "enip-identity-tcp-v1"
+	ProfileModbusIdentityTCP = "modbus-device-id-basic-tcp-v1"
+	MaxTargets               = 256
+	MaxResponseBytes         = 4096
 )
 
 // Input fields are deliberately serialized even when empty. Hashing includes
@@ -47,6 +48,7 @@ type Target struct {
 	Port            int              `json:"port"`
 	RequestedFields []string         `json:"requested_fields"`
 	Expected        ExpectedIdentity `json:"expected"`
+	UnitID          *int             `json:"unit_id,omitempty"`
 }
 
 type ExpectedIdentity struct {
@@ -82,6 +84,26 @@ func NewPlan(targets []Target, purpose string) (Plan, error) {
 		Budget: Budget{MaxTargets: MaxTargets, MaxConnections: n, MaxRequests: n,
 			MaxBytesSent: 24 * n, MaxBytesReceived: MaxResponseBytes * n,
 			TimeoutMS: 2000, MaxDurationMS: 300000, Concurrency: 1, RequestsPerSecond: 2}}
+	var err error
+	p.PlanHash, err = Hash(p)
+	if err != nil {
+		return Plan{}, err
+	}
+	if err = Validate(p); err != nil {
+		return Plan{}, err
+	}
+	return p, nil
+}
+
+// NewModbusLabPlan scopes a basic identification request to a single known unit.
+// The returned plan contains no fallback, discovery sweep, or firmware claim.
+func NewModbusLabPlan(target Target) (Plan, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return Plan{}, err
+	}
+	now := time.Now().UTC()
+	p := Plan{SchemaVersion: 2, ID: hex.EncodeToString(id[:]), Purpose: "enrich", Profile: ProfileModbusIdentityTCP, CreatedAt: now.Format(time.RFC3339Nano), ExpiresAt: now.Add(10 * time.Minute).Format(time.RFC3339Nano), Targets: []Target{target}, Budget: Budget{MaxTargets: 1, MaxConnections: 1, MaxRequests: 1, MaxBytesSent: 11, MaxBytesReceived: 260, TimeoutMS: 2000, MaxDurationMS: 5000, Concurrency: 1, RequestsPerSecond: 1}}
 	var err error
 	p.PlanHash, err = Hash(p)
 	if err != nil {
@@ -266,14 +288,14 @@ func canonical(out *bytes.Buffer, v any) error {
 func Validate(p Plan) error { return validateAt(p, time.Now()) }
 func validateAt(p Plan, now time.Time) error {
 	bad := func(s string) error { return fmt.Errorf("invalid query plan: %s", s) }
-	if p.SchemaVersion != SchemaVersion {
+	if !(p.SchemaVersion == SchemaVersion && p.Profile == ProfileENIPIdentityTCP || p.SchemaVersion == 2 && p.Profile == ProfileModbusIdentityTCP) {
 		return bad("unsupported schema_version")
-	}
-	if p.Profile != ProfileENIPIdentityTCP {
-		return bad("unsupported profile")
 	}
 	if p.Purpose != "enrich" && p.Purpose != "verify" {
 		return bad("purpose must be enrich or verify")
+	}
+	if p.Profile == ProfileModbusIdentityTCP && (p.Purpose != "enrich" || p.Budget.Concurrency != 1 || p.Budget.RequestsPerSecond != 1) {
+		return bad("Modbus lab profile requires identity enrichment at one request per second")
 	}
 	if strings.TrimSpace(p.ID) == "" || len(p.ID) > 128 {
 		return bad("id is required and limited to 128 bytes")
@@ -296,7 +318,11 @@ func validateAt(p Plan, now time.Time) error {
 	if b.MaxConnections < 1 || b.MaxConnections > b.MaxTargets || b.MaxRequests < 1 || b.MaxRequests > b.MaxTargets {
 		return bad("connections and requests must be 1..max_targets")
 	}
-	if b.MaxBytesSent < 24 || b.MaxBytesSent > 24*b.MaxTargets || b.MaxBytesReceived < 24 || b.MaxBytesReceived > MaxResponseBytes*b.MaxTargets {
+	minSent, maxSent, minReceived, maxReceived := 24, 24*b.MaxTargets, 24, MaxResponseBytes*b.MaxTargets
+	if p.Profile == ProfileModbusIdentityTCP {
+		minSent, maxSent, minReceived, maxReceived = 11, 11*b.MaxTargets, 9, 260*b.MaxTargets
+	}
+	if b.MaxBytesSent < minSent || b.MaxBytesSent > maxSent || b.MaxBytesReceived < minReceived || b.MaxBytesReceived > maxReceived {
 		return bad("invalid application byte budget")
 	}
 	if b.TimeoutMS < 1 || b.TimeoutMS > 10000 || b.MaxDurationMS < 1 || b.MaxDurationMS > 300000 || b.Concurrency < 1 || b.Concurrency > 8 || b.RequestsPerSecond < 1 || b.RequestsPerSecond > 10 {
@@ -313,19 +339,28 @@ func validateAt(p Plan, now time.Time) error {
 		if err != nil || !ip.Is4() || ip.IsUnspecified() || ip.IsMulticast() || ip.String() != t.IP || t.IP == "255.255.255.255" || ip.As4()[0] == 0 || ip.As4()[0] >= 240 {
 			return bad("target must be a canonical IPv4 unicast literal")
 		}
-		if t.Port != 44818 {
-			return bad("profile permits only TCP port 44818")
+		endpointKey := t.IP
+		if p.Profile == ProfileENIPIdentityTCP {
+			if t.Port != 44818 || t.UnitID != nil {
+				return bad("invalid ENIP endpoint")
+			}
+		} else {
+			if t.Port != 502 || t.UnitID == nil || *t.UnitID < 1 || *t.UnitID > 247 && *t.UnitID != 255 || t.Expected.Serial != "" || t.Expected.Model != "" {
+				return bad("invalid Modbus endpoint or identity")
+			}
+			endpointKey = fmt.Sprintf("%s/%d", t.IP, *t.UnitID)
 		}
-		if seenEndpoints[t.IP] {
+		if seenEndpoints[endpointKey] {
 			return bad("duplicate physical endpoint")
 		}
-		seenEndpoints[t.IP] = true
+		seenEndpoints[endpointKey] = true
 		if len(t.RequestedFields) == 0 || len(t.RequestedFields) > 4 {
 			return bad("requested_fields is required")
 		}
 		fields := map[string]bool{}
 		for _, f := range t.RequestedFields {
-			if (f != "vendor" && f != "model" && f != "firmware" && f != "serial") || fields[f] {
+			allowed := f == "vendor" || p.Profile == ProfileENIPIdentityTCP && (f == "model" || f == "firmware" || f == "serial") || p.Profile == ProfileModbusIdentityTCP && (f == "product_code" || f == "identity_revision")
+			if !allowed || fields[f] {
 				return bad("unsupported or duplicate requested field")
 			}
 			fields[f] = true

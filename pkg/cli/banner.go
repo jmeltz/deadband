@@ -2,7 +2,7 @@ package cli
 
 import "fmt"
 
-var Version = "0.8.1"
+var Version = "0.9.0"
 
 func PrintBanner(toolName, version, description string) {
 	fmt.Printf("[deadband] %s v%s — %s\n", toolName, version, description)

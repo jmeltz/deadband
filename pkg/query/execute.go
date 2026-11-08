@@ -157,7 +157,7 @@ func execute(ctx context.Context, p Plan, dial dialFunc) (Result, error) {
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r.Outcomes[i] = executeTarget(execCtx, ctx, p.Targets[i], p.Budget, l, dial)
+				r.Outcomes[i] = executeTarget(execCtx, ctx, p.Targets[i], p.Budget, l, dial, p.Profile)
 			}
 		}()
 	}
@@ -170,7 +170,7 @@ func execute(ctx context.Context, p Plan, dial dialFunc) (Result, error) {
 	return r, nil
 }
 
-func executeTarget(ctx, parent context.Context, t Target, b Budget, l *ledger, dial dialFunc) (o Outcome) {
+func executeTarget(ctx, parent context.Context, t Target, b Budget, l *ledger, dial dialFunc, profile string) (o Outcome) {
 	o = Outcome{AssetID: t.AssetID, IP: t.IP, Observations: []Observation{}}
 	defer func() { o.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano) }()
 	fail := func(err error) Outcome { o.Status = statusFor(err, ctx, parent); o.Error = err.Error(); return o }
@@ -204,6 +204,9 @@ func executeTarget(ctx, parent context.Context, t Target, b Budget, l *ledger, d
 	}
 	if err := l.pace(probeCtx, true); err != nil {
 		return fail(err)
+	}
+	if profile == ProfileModbusIdentityTCP {
+		return executeModbusTarget(conn, t, l, o, ctx, parent)
 	}
 	if !l.take("requests", 1) {
 		return fail(errBudget)
