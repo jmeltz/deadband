@@ -31,18 +31,21 @@ type Asset struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Source      string    `json:"source"` // discovery, upload, manual
 	// Hardware identity (populated by protocol scanners)
-	Serial   string `json:"serial,omitempty"`
-	MAC      string `json:"mac,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
-	OrderNum string `json:"order_number,omitempty"`
-	Protocol string `json:"protocol,omitempty"`
+	Serial   string            `json:"serial,omitempty"`
+	MAC      string            `json:"mac,omitempty"`
+	Hostname string            `json:"hostname,omitempty"`
+	OrderNum string            `json:"order_number,omitempty"`
+	Protocol string            `json:"protocol,omitempty"`
 	Port     int               `json:"port,omitempty"`
 	Slot     int               `json:"slot,omitempty"`
 	Extra    map[string]string `json:"extra,omitempty"`
 	// Lifecycle
 	Status string `json:"status"` // active, retired, quarantined, unknown
 	// Vulnerability state (populated by asset checks)
-	VulnState *VulnState `json:"vuln_state,omitempty"`
+	VulnState         *VulnState         `json:"vuln_state,omitempty"`
+	AssessmentHistory []VulnState        `json:"assessment_history,omitempty"`
+	Observations      []FieldObservation `json:"observations,omitempty"`
+	Overrides         map[string]string  `json:"overrides,omitempty"`
 }
 
 // Store holds the persisted asset inventory.
@@ -93,7 +96,19 @@ func Save(path string, s *Store) error {
 	if err != nil {
 		return fmt.Errorf("encoding assets: %w", err)
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".assets-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // ImportResult summarizes what happened during an import.
@@ -114,35 +129,38 @@ func (s *Store) Import(devices []inventory.Device, source string) ImportResult {
 	idx := make(map[string]int, len(s.Assets))
 	serialIdx := make(map[string]int, len(s.Assets))
 	for i, a := range s.Assets {
-		idx[dedupKey(a.IP, a.Vendor, a.Model)] = i
-		if a.Serial != "" {
-			serialIdx[strings.ToLower(a.Serial)] = i
+		idx[assetDedupKey(a.IP, a.Vendor, a.Model, a.Slot, a.Extra)] = i
+		if a.Serial != "" && a.Vendor != "" {
+			serialIdx[serialComponentKey(a.Vendor, a.Model, a.Serial, a.Slot, a.Extra)] = i
 		}
 	}
 
 	for _, d := range devices {
-		key := dedupKey(d.IP, d.Vendor, d.Model)
+		key := assetDedupKey(d.IP, d.Vendor, d.Model, d.Slot, d.Extra)
 		i, ok := idx[key]
 		// Fallback: match by serial (handles DHCP re-addressing)
-		if !ok && d.Serial != "" {
-			if si, sok := serialIdx[strings.ToLower(d.Serial)]; sok {
+		if !ok && d.Serial != "" && d.Vendor != "" {
+			if si, sok := serialIdx[serialComponentKey(d.Vendor, d.Model, d.Serial, d.Slot, d.Extra)]; sok {
 				i, ok = si, true
 				// Track IP change
 				if s.Assets[i].IP != d.IP {
+					oldKey := assetDedupKey(s.Assets[i].IP, s.Assets[i].Vendor, s.Assets[i].Model, s.Assets[i].Slot, s.Assets[i].Extra)
 					if s.Assets[i].Extra == nil {
 						s.Assets[i].Extra = map[string]string{}
 					}
 					s.Assets[i].Extra["previous_ip"] = s.Assets[i].IP
 					s.Assets[i].IP = d.IP
 					// Update primary index
-					delete(idx, dedupKey(s.Assets[i].IP, s.Assets[i].Vendor, s.Assets[i].Model))
+					delete(idx, oldKey)
 					idx[key] = i
 				}
 			}
 		}
 		if ok {
-			// Update existing — refresh firmware, hardware fields, and last seen
-			s.Assets[i].Firmware = d.Firmware
+			// Update existing — refresh firmware, hardware fields, Extra metadata, and last seen
+			if d.Firmware != "" || s.Assets[i].Firmware == "" {
+				s.Assets[i].Firmware = d.Firmware
+			}
 			s.Assets[i].LastSeen = now
 			if d.Serial != "" {
 				s.Assets[i].Serial = d.Serial
@@ -165,9 +183,26 @@ func (s *Store) Import(devices []inventory.Device, source string) ImportResult {
 			if d.Slot != 0 {
 				s.Assets[i].Slot = d.Slot
 			}
+			if len(d.Extra) > 0 {
+				if s.Assets[i].Extra == nil {
+					s.Assets[i].Extra = make(map[string]string, len(d.Extra))
+				}
+				for k, v := range d.Extra {
+					if v != "" {
+						s.Assets[i].Extra[k] = v
+					}
+				}
+			}
 			result.Updated++
 		} else {
 			// New asset
+			var clonedExtra map[string]string
+			if len(d.Extra) > 0 {
+				clonedExtra = make(map[string]string, len(d.Extra))
+				for k, v := range d.Extra {
+					clonedExtra[k] = v
+				}
+			}
 			a := Asset{
 				ID:        newID(),
 				IP:        d.IP,
@@ -181,6 +216,7 @@ func (s *Store) Import(devices []inventory.Device, source string) ImportResult {
 				Protocol:  d.Protocol,
 				Port:      d.Port,
 				Slot:      d.Slot,
+				Extra:     clonedExtra,
 				FirstSeen: now,
 				LastSeen:  now,
 				Source:    source,
@@ -322,6 +358,7 @@ func (s *Store) Filter(opts FilterOpts) []Asset {
 				!strings.Contains(strings.ToLower(a.Notes), q) &&
 				!strings.Contains(strings.ToLower(a.Serial), q) &&
 				!strings.Contains(strings.ToLower(a.Hostname), q) &&
+				!anyExtraContains(a.Extra, q) &&
 				!anyTagContains(a.Tags, q) {
 				continue
 			}
@@ -432,17 +469,26 @@ func anyTagContains(tags []string, q string) bool {
 	return false
 }
 
+func anyExtraContains(extra map[string]string, q string) bool {
+	for _, v := range extra {
+		if strings.Contains(strings.ToLower(v), q) {
+			return true
+		}
+	}
+	return false
+}
+
 // Summary computes aggregate statistics across all assets.
 type Summary struct {
-	TotalAssets    int                       `json:"total_assets"`
-	ByStatus       map[string]int            `json:"by_status"`
-	ByCriticality  map[string]int            `json:"by_criticality"`
-	ByVulnStatus   map[string]int            `json:"by_vuln_status"`
-	BySite         map[string]SiteSummary    `json:"by_site"`
-	TopCVEs        []CVECount                `json:"top_cves"`
-	KEVAffected    int                       `json:"kev_affected_assets"`
-	StaleAssets    int                       `json:"stale_assets"`
-	LastCheck      string                    `json:"last_check,omitempty"`
+	TotalAssets   int                    `json:"total_assets"`
+	ByStatus      map[string]int         `json:"by_status"`
+	ByCriticality map[string]int         `json:"by_criticality"`
+	ByVulnStatus  map[string]int         `json:"by_vuln_status"`
+	BySite        map[string]SiteSummary `json:"by_site"`
+	TopCVEs       []CVECount             `json:"top_cves"`
+	KEVAffected   int                    `json:"kev_affected_assets"`
+	StaleAssets   int                    `json:"stale_assets"`
+	LastCheck     string                 `json:"last_check,omitempty"`
 }
 
 // SiteSummary holds per-site rollup.
@@ -552,6 +598,29 @@ func (s *Store) ComputeSummary() Summary {
 
 func dedupKey(ip, vendor, model string) string {
 	return strings.ToLower(ip + "|" + vendor + "|" + model)
+}
+
+func assetDedupKey(ip, vendor, model string, slot int, extra map[string]string) string {
+	base := dedupKey(ip, vendor, model)
+	if slot > 0 || extra["slot"] != "" {
+		base += fmt.Sprintf("|slot:%d", slot)
+	}
+	if inst := extra["device_instance"]; inst != "" {
+		base += "|inst:" + strings.ToLower(inst)
+	}
+	return base
+}
+
+// SameComponent uses the inventory identity, including chassis slot and routed
+// device instance, to correlate a discovery result without collapsing modules.
+func SameComponent(a Asset, d inventory.Device) bool {
+	return assetDedupKey(a.IP, a.Vendor, a.Model, a.Slot, a.Extra) == assetDedupKey(d.IP, d.Vendor, d.Model, d.Slot, d.Extra)
+}
+
+func ComponentKey(a Asset) string { return assetDedupKey(a.IP, a.Vendor, a.Model, a.Slot, a.Extra) }
+
+func serialComponentKey(vendor, model, serial string, slot int, extra map[string]string) string {
+	return assetDedupKey("", vendor, model, slot, extra) + "|serial:" + strings.ToLower(strings.TrimSpace(serial))
 }
 
 func newID() string {

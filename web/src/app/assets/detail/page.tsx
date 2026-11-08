@@ -3,7 +3,8 @@
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Card, StatCard } from "@/components/ui/Card";
+import { EnrichmentPanel } from "@/components/assets/EnrichmentPanel";
+import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime } from "@/lib/utils/format";
 import { useState, Suspense } from "react";
@@ -100,6 +101,8 @@ function AssetDetailContent() {
       <Link href="/assets" className="text-xs text-db-teal-light hover:text-db-text transition-colors">
         &larr; Back to Assets
       </Link>
+
+      <EnrichmentPanel ids={[id]} />
 
       {/* Header */}
       <Card>
@@ -309,11 +312,16 @@ function AssetDetailContent() {
               onClick={() => checkAssets.mutate()}
               disabled={checkAssets.isPending}
             >
-              {checkAssets.isPending ? "Checking..." : "Check Now"}
+              {checkAssets.isPending ? "Checking..." : "Recheck advisories"}
             </Button>
           </div>
         )}
       </Card>
+      {!!asset.observations?.length && <Card>
+        <h3 className="font-heading text-sm font-semibold">Identity evidence</h3>
+        <p className="text-xs text-db-muted mt-1">Recent device observations; conflicting claims are retained without replacing the asset identity.</p>
+        <div className="overflow-x-auto mt-3"><table className="w-full text-xs text-left"><thead className="text-db-muted"><tr><th className="p-2">Field</th><th className="p-2">Observed value</th><th className="p-2">Source</th><th className="p-2">Observed</th><th className="p-2">Conflict</th></tr></thead><tbody>{asset.observations.slice(-20).reverse().map((o,i)=><tr key={i} className="border-t border-db-border"><td className="p-2">{o.field}</td><td className="p-2 font-mono">{o.value}</td><td className="p-2">{o.protocol} · {o.operation}</td><td className="p-2">{formatDateTime(o.observed_at)}</td><td className="p-2">{o.conflict ? "Review" : "—"}</td></tr>)}</tbody></table></div>
+      </Card>}
     </div>
   );
 }

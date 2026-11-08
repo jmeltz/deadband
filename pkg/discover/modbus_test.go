@@ -2,7 +2,10 @@ package discover
 
 import (
 	"encoding/binary"
+	"net"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestBuildModbusMBAP(t *testing.T) {
@@ -315,6 +318,11 @@ func TestNormalizeModbusVendor(t *testing.T) {
 		{"Beckhoff Automation", "Beckhoff"},
 		{"OMRON Corporation", "Omron"},
 		{"Allen-Bradley", "Rockwell Automation"},
+		{"Danfoss A/S", "Danfoss"},
+		{"CAREL INDUSTRIES S.p.A.", "CAREL"},
+		{"Dixell S.r.l.", "Copeland"},
+		{"Interroll Automation", "Interroll"},
+		{"SEW-EURODRIVE GmbH", "SEW-EURODRIVE"},
 		{"Unknown Vendor Co.", "Unknown Vendor Co."},
 		{"", ""},
 		{"  Moxa  ", "Moxa"},
@@ -327,5 +335,58 @@ func TestNormalizeModbusVendor(t *testing.T) {
 				t.Errorf("normalizeModbusVendor(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModbusTCPIdentifyPortUnitFallback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				req := make([]byte, 64)
+				n, err := c.Read(req)
+				if err != nil || n < 11 {
+					return
+				}
+				txnID := binary.BigEndian.Uint16(req[0:2])
+				unitID := req[6]
+				if unitID != 0xFF {
+					// Reject Unit 0x01 with Modbus Gateway Target Failed exception
+					errPDU := []byte{mbFuncMEIError, 0x0B}
+					_, _ = c.Write(buildModbusMBAP(txnID, unitID, errPDU))
+					return
+				}
+				// Respond on Unit 0xFF (255)
+				pdu := []byte{
+					mbFuncMEI, meiReadDeviceID, devIDRegular, 0x02, 0x00, 0x00, 0x03,
+					0x00, 0x05, 'C', 'A', 'R', 'E', 'L',
+					0x01, 0x06, 'p', 'C', 'O', 'W', 'e', 'b',
+					0x02, 0x05, '1', '.', '7', '.', '4',
+				}
+				_, _ = c.Write(buildModbusMBAP(txnID, unitID, pdu))
+			}(conn)
+		}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	id, err := ModbusTCPIdentifyPort(host, port, 1*time.Second)
+	if err != nil || id == nil {
+		t.Fatalf("ModbusTCPIdentifyPort = (%+v, %v), want CAREL pCOWeb on Unit 0xFF", id, err)
+	}
+	dev := ModbusIdentityToDevice(host, id)
+	if dev.Vendor != "CAREL" || dev.Model != "pCOWeb" || dev.Firmware != "1.7.4" {
+		t.Errorf("device = %+v, want CAREL / pCOWeb / 1.7.4", dev)
 	}
 }

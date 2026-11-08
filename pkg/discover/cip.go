@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,12 +13,12 @@ import (
 )
 
 const (
-	eipCommandListIdentity      uint16 = 0x0063
-	eipCommandRegisterSession   uint16 = 0x0065
-	eipCommandSendRRData        uint16 = 0x006F
-	eipHeaderSize                      = 24
-	cipItemTypeIdentity         uint16 = 0x000C
-	cipSocketAddrSize                  = 16
+	eipCommandListIdentity    uint16 = 0x0063
+	eipCommandRegisterSession uint16 = 0x0065
+	eipCommandSendRRData      uint16 = 0x006F
+	eipHeaderSize                    = 24
+	cipItemTypeIdentity       uint16 = 0x000C
+	cipSocketAddrSize                = 16
 
 	cipServiceGetAttrAll      byte = 0x01
 	cipServiceUnconnectedSend byte = 0x52
@@ -47,16 +48,46 @@ var vendorNames = map[uint16]string{
 	1:   "Rockwell Automation",
 	2:   "Neles (Metso)",
 	5:   "ODVA",
-	40:  "ABB",
+	7:   "SMC",
+	40:  "WAGO",
+	44:  "Yaskawa",
+	47:  "Omron",
 	56:  "Molex",
-	90:  "Turck",
+	68:  "Eaton",
+	75:  "ABB",
+	90:  "TURCK",
+	97:  "Danfoss",
+	105: "PEPPERL+FUCHS",
+	108: "Beckhoff",
+	134: "Mitsubishi Electric",
+	166: "Festo",
+	181: "Pilz",
 	246: "Yamazaki Mazak",
 	266: "Schneider Electric",
 	283: "Siemens",
+	287: "Leuze",
+	315: "SEW-EURODRIVE",
+	324: "Banner Engineering",
 	326: "Emerson / GE",
 	356: "Fanuc",
+	480: "Balluff",
+	562: "Phoenix Contact",
+	586: "ifm electronic",
 	591: "Fanuc",
+	655: "Murrelektronik",
 	671: "Honeywell",
+	678: "Cognex",
+	792: "Keyence",
+	808: "SICK",
+	913: "Moxa",
+}
+
+// CIPVendorName maps an ODVA CIP Vendor ID to Deadband's canonical vendor name.
+func CIPVendorName(vendorID uint16) string {
+	if v, ok := vendorNames[vendorID]; ok {
+		return v
+	}
+	return fmt.Sprintf("Vendor(%d)", vendorID)
 }
 
 // FanucCIPVendorID is FANUC Ltd.'s ODVA EtherNet/IP Vendor ID (CNCs: 30i/31i/32i/0i).
@@ -307,15 +338,10 @@ func discoverCIP(ips []string, broadcastAddr string, timeout time.Duration, conc
 			if progress != nil {
 				progress(fmt.Sprintf("Found %d modules in chassis at %s", len(modules), ip))
 			}
-			// Deduplicate by model+firmware (multiple identical cards share the same advisory profile)
-			seen := make(map[string]bool)
+			// Physical modules remain distinct even when model and firmware match.
 			for i := range modules {
 				dev := BackplaneModuleToDevice(ip, &modules[i])
-				key := dev.Model + "|" + dev.Firmware
-				if !seen[key] {
-					seen[key] = true
-					devices = append(devices, dev)
-				}
+				devices = append(devices, dev)
 			}
 		} else {
 			// Fall back to the ListIdentity result
@@ -406,7 +432,7 @@ func (s *cipSession) getSlotIdentity(slot int, timeout time.Duration) (*Backplan
 		cipServiceGetAttrAll,
 		0x02,                   // path size: 2 words
 		0x20, cipClassIdentity, // 8-bit class segment: class 1
-		0x24, 0x01,             // 8-bit instance segment: instance 1
+		0x24, 0x01, // 8-bit instance segment: instance 1
 	}
 
 	// Unconnected Send request to Connection Manager (class 6, instance 1)
@@ -414,9 +440,9 @@ func (s *cipSession) getSlotIdentity(slot int, timeout time.Duration) (*Backplan
 		cipServiceUnconnectedSend,
 		0x02,                  // path size: 2 words
 		0x20, cipClassConnMgr, // class 6
-		0x24, 0x01,            // instance 1
-		0x0A,                  // priority / time tick
-		0x04,                  // timeout ticks
+		0x24, 0x01, // instance 1
+		0x0A, // priority / time tick
+		0x04, // timeout ticks
 	}
 	cip = append(cip, byte(len(embedded)), byte(len(embedded)>>8)) // embedded msg length (uint16 LE)
 	cip = append(cip, embedded...)
@@ -429,12 +455,12 @@ func (s *cipSession) getSlotIdentity(slot int, timeout time.Duration) (*Backplan
 
 	// Wrap in SendRRData with Common Packet Format
 	cpf := make([]byte, 0, 16+len(cip))
-	cpf = appendUint32LE(cpf, 0)              // interface handle
-	cpf = appendUint16LE(cpf, 0)              // timeout
-	cpf = appendUint16LE(cpf, 2)              // item count
-	cpf = appendUint16LE(cpf, 0x0000)         // item 1: null address type
-	cpf = appendUint16LE(cpf, 0)              // item 1: length 0
-	cpf = appendUint16LE(cpf, 0x00B2)         // item 2: unconnected data type
+	cpf = appendUint32LE(cpf, 0)                // interface handle
+	cpf = appendUint16LE(cpf, 0)                // timeout
+	cpf = appendUint16LE(cpf, 2)                // item count
+	cpf = appendUint16LE(cpf, 0x0000)           // item 1: null address type
+	cpf = appendUint16LE(cpf, 0)                // item 1: length 0
+	cpf = appendUint16LE(cpf, 0x00B2)           // item 2: unconnected data type
 	cpf = appendUint16LE(cpf, uint16(len(cip))) // item 2: data length
 	cpf = append(cpf, cip...)
 
@@ -570,6 +596,7 @@ func BackplaneModuleToDevice(ip string, mod *BackplaneModule) inventory.Device {
 		Protocol: "cip",
 		Port:     EIPPort,
 		Slot:     mod.Slot,
+		Extra:    map[string]string{"slot": strconv.Itoa(mod.Slot), "component": "chassis_slot"},
 	}
 }
 

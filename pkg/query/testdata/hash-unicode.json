@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "interop <&>     literal \\u2028",
+  "purpose": "enrich",
+  "profile": "enip-identity-tcp-v1",
+  "created_at": "2026-11-07T12:00:00Z",
+  "expires_at": "2026-11-07T13:00:00Z",
+  "targets": [
+    {
+      "asset_id": "asset-1",
+      "ip": "127.0.0.1",
+      "port": 44818,
+      "requested_fields": [
+        "model",
+        "firmware",
+        "serial"
+      ],
+      "expected": {
+        "vendor": "Rockwell Automation",
+        "model": "",
+        "serial": ""
+      }
+    }
+  ],
+  "budget": {
+    "max_targets": 1,
+    "max_connections": 1,
+    "max_requests": 1,
+    "max_bytes_sent": 24,
+    "max_bytes_received": 4096,
+    "timeout_ms": 2000,
+    "max_duration_ms": 300000,
+    "concurrency": 1,
+    "requests_per_second": 2
+  },
+  "plan_hash": "23be8b3c6f779a1c4f56fb362c4e2a5a7e8ce5faa01ed33e8a424f0e7d380d68"
+}

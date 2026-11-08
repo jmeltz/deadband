@@ -34,9 +34,11 @@ type Cond struct {
 
 // HostCond selects which hosts within a qualifying subnet trigger a finding.
 type HostCond struct {
-	Class   DeviceClass // only match hosts of this class ("" = any)
-	AnyPort []int       // host must have at least one of these ports open
-	HasITPorts bool     // host must have any port from ITPorts (used for critical_ot_exposed)
+	Class           DeviceClass // only match hosts of this class ("" = any)
+	AnyPort         []int       // host must have at least one of these ports open
+	AlsoAnyPort     []int       // host must ALSO have at least one of these ports open
+	MissingAllPorts []int       // host must NOT have any of these ports open
+	HasITPorts      bool        // host must have any port from ITPorts (used for critical_ot_exposed)
 }
 
 // ---------- Default ruleset ----------
@@ -105,6 +107,30 @@ var DefaultRules = []Rule{
 		Host: HostCond{Class: ClassOT, HasITPorts: true},
 		Desc: "OT device %s (%s) on subnet %s has IT service(s) %s open. " +
 			"Web servers, SSH, and other IT services on OT controllers expand the attack surface.",
+	},
+	{
+		ID:       "ads_it_coexposure",
+		Title:    "TwinCAT ADS Co-Exposed with Windows Remote/File Services",
+		Severity: "critical",
+		Scope:    "host",
+		When: []Cond{
+			{Field: "ot_count", Op: "gt", Value: 0},
+		},
+		Host: HostCond{AnyPort: []int{48898}, AlsoAnyPort: []int{3389, 445}},
+		Desc: "TwinCAT IPC %s on OT subnet %s simultaneously exposes ADS (48898) and Windows IT service(s) %s. " +
+			"Compromising RDP or SMB on a Windows Embedded IPC grants direct PLC runtime control.",
+	},
+	{
+		ID:       "cleartext_ot_web",
+		Title:    "Cleartext HTTP Management Interface on OT Device",
+		Severity: "medium",
+		Scope:    "host",
+		When: []Cond{
+			{Field: "ot_count", Op: "gt", Value: 0},
+		},
+		Host: HostCond{Class: ClassOT, AnyPort: []int{80, 8080}, MissingAllPorts: []int{443, 8443}},
+		Desc: "OT device %s (%s) on subnet %s exposes cleartext HTTP (%s) without HTTPS. " +
+			"Credentials and setpoint commands on BMS, refrigeration, or WCS web portals may be intercepted in transit.",
 	},
 	{
 		ID:       "unknown_device_in_ot",
@@ -227,13 +253,17 @@ func evalHostRule(rule Rule, sa SubnetAnalysis, controlSet string) []Finding {
 		case "smb_in_ot":
 			desc = fmt.Sprintf(rule.Desc, h.IP, sa.Subnet)
 			evidence = []string{fmt.Sprintf("%s: SMB:445", label)}
-		case "critical_ot_exposed":
+		case "critical_ot_exposed", "cleartext_ot_web":
 			svcList := strings.Join(matched, ", ")
 			identity := strings.TrimSpace(h.Vendor + " " + h.Model)
 			if identity == "" {
 				identity = h.IP
 			}
 			desc = fmt.Sprintf(rule.Desc, h.IP, identity, sa.Subnet, svcList)
+			evidence = []string{fmt.Sprintf("%s: %s", label, svcList)}
+		case "ads_it_coexposure":
+			svcList := strings.Join(matched, ", ")
+			desc = fmt.Sprintf(rule.Desc, h.IP, sa.Subnet, svcList)
 			evidence = []string{fmt.Sprintf("%s: %s", label, svcList)}
 		default:
 			desc = fmt.Sprintf(rule.Desc, h.IP, sa.Subnet)
@@ -317,6 +347,27 @@ func matchHostCond(hc HostCond, h ClassifiedHost) bool {
 		}
 		if !found {
 			return false
+		}
+	}
+	// AlsoAnyPort: host must ALSO have at least one of these ports open
+	if len(hc.AlsoAnyPort) > 0 {
+		found := false
+		for _, target := range hc.AlsoAnyPort {
+			if portIn(h.OpenPorts, target) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	// MissingAllPorts: host must NOT have any of these ports open
+	if len(hc.MissingAllPorts) > 0 {
+		for _, forbidden := range hc.MissingAllPorts {
+			if portIn(h.OpenPorts, forbidden) {
+				return false
+			}
 		}
 	}
 	// HasITPorts: host must have any IT-class port open
@@ -408,6 +459,17 @@ func matchedPortNames(h ClassifiedHost, rule Rule) []string {
 	var names []string
 	if len(rule.Host.AnyPort) > 0 {
 		for _, p := range rule.Host.AnyPort {
+			if portIn(h.OpenPorts, p) {
+				if name, ok := PortServiceName[p]; ok {
+					names = append(names, fmt.Sprintf("%s:%d", name, p))
+				} else {
+					names = append(names, fmt.Sprintf("%d", p))
+				}
+			}
+		}
+	}
+	if len(rule.Host.AlsoAnyPort) > 0 {
+		for _, p := range rule.Host.AlsoAnyPort {
 			if portIn(h.OpenPorts, p) {
 				if name, ok := PortServiceName[p]; ok {
 					names = append(names, fmt.Sprintf("%s:%d", name, p))

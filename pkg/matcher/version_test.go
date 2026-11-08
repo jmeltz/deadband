@@ -30,6 +30,35 @@ func TestVersionAffected(t *testing.T) {
 
 		// Empty firmware — flag conservatively
 		{"", []string{"<=12.0"}, true, ConfidenceLow},
+
+		// Multi-branch affected_versions (must NOT exit early on first non-matching branch)
+		{"4.9.0", []string{"<3.0.0", "<4.10.1"}, true, ConfidenceHigh},
+		{"4.12.0", []string{"<3.0.0", "<4.10.1"}, false, ConfidenceHigh},
+
+		// CSAF vers:<scheme>/ prefixes (bounded vs wildcard)
+		{"4.13.1", []string{"vers:all/<4.12.2.16"}, false, ConfidenceHigh},
+		{"4.11.0", []string{"vers:all/<4.12.2.16"}, true, ConfidenceHigh},
+		{"3.1.4024.10", []string{"vers:intdot/<3.1.4024.53"}, true, ConfidenceHigh},
+		{"3.1.4024.65", []string{"vers:intdot/<3.1.4024.53"}, false, ConfidenceHigh},
+
+		// Pipe-bounded intervals and discrete version lists
+		{"6.2.1", []string{">=5.x|<=6.5.1"}, true, ConfidenceHigh},
+		{"4.9.0", []string{">=5.x|<=6.5.1"}, false, ConfidenceHigh},
+		{"6.6.0", []string{">=5.x|<=6.5.1"}, false, ConfidenceHigh},
+		{"2.11", []string{"2.10|2.11|2.12"}, true, ConfidenceHigh},
+		{"2.13", []string{"2.10|2.11|2.12"}, false, ConfidenceHigh},
+		{"2.2.0", []string{"vers:intdot/>=1.0|<1.5|>=2.0|<2.3"}, true, ConfidenceHigh},
+		{"1.8.0", []string{"vers:intdot/>=1.0|<1.5|>=2.0|<2.3"}, false, ConfidenceHigh},
+
+		// Beckhoff Build strings & letter-prefixed revisions
+		{"3.1.4020", []string{"<=3.1 Build 4022.4"}, true, ConfidenceHigh},
+		{"3.1.4024", []string{"<=3.1 Build 4022.4"}, false, ConfidenceHigh},
+		{"4.1", []string{"<R4.2"}, true, ConfidenceHigh},
+		{"4.3", []string{"<R4.2"}, false, ConfidenceHigh},
+		{"4.90", []string{"<= C4.93"}, true, ConfidenceHigh},
+		{"4.95", []string{"<= C4.93"}, false, ConfidenceHigh},
+		{"12.0", []string{"< FW14"}, true, ConfidenceHigh},
+		{"14.1", []string{"< FW14"}, false, ConfidenceHigh},
 	}
 	for _, tt := range tests {
 		affected, conf := VersionAffected(tt.firmware, tt.versions)

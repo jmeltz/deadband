@@ -1,0 +1,1 @@
+Synthetic S7 UserData SZL 001C and 0011 responses from a local identification responder. All persona identity strings are simulated; these are not real PLC identities or tolerance evidence. Frame/record interpretation checked against Siemens STEP 7 SZL component identification and Snap7 read-SZL/client source; no third-party implementation code copied.

@@ -3,6 +3,8 @@ package pcap
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/jmeltz/deadband/pkg/discover"
 	"github.com/jmeltz/deadband/pkg/inventory"
@@ -10,10 +12,10 @@ import (
 
 // AnalyzeResult holds the output of passive pcap analysis.
 type AnalyzeResult struct {
-	Devices    []inventory.Device
-	PacketsIn  int
-	Parsed     int
-	Errors     int
+	Devices   []inventory.Device
+	PacketsIn int
+	Parsed    int
+	Errors    int
 }
 
 // Analyze reads a pcap file, extracts ICS protocol responses, and returns
@@ -23,12 +25,16 @@ func Analyze(path string, progress func(string)) (*AnalyzeResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
 
-	if reader.LinkType() != 1 {
-		return nil, fmt.Errorf("unsupported link type %d (only Ethernet supported)", reader.LinkType())
+	switch reader.LinkType() {
+	case 0, 1, 101, 108, 228:
+	default:
+		return nil, fmt.Errorf("unsupported link type %d (Ethernet, IPv4 raw and loopback supported)", reader.LinkType())
 	}
 
-	seen := make(map[string]inventory.Device) // keyed by IP
+	seen := make(map[string]inventory.Device)
+	var order []string
 	result := &AnalyzeResult{}
 
 	for {
@@ -42,26 +48,29 @@ func Analyze(path string, progress func(string)) (*AnalyzeResult, error) {
 		}
 		result.PacketsIn++
 
-		frame, err := DemuxEthernet(pkt.Data)
+		frame, err := DemuxLink(reader.LinkType(), pkt.Data)
 		if err != nil {
 			continue // skip non-IP, non-TCP/UDP
 		}
 
 		if dev := tryParseProtocol(frame); dev != nil {
-			key := dev.IP
-			if _, exists := seen[key]; !exists {
+			key := passiveDeviceKey(*dev)
+			if prev, exists := seen[key]; !exists {
 				seen[key] = *dev
+				order = append(order, key)
 				result.Parsed++
 				if progress != nil {
 					progress(fmt.Sprintf("Found %s %s (fw %s) via %s", dev.IP, dev.Model, dev.Firmware, dev.Vendor))
 				}
+			} else {
+				seen[key] = mergePassiveDevice(prev, *dev)
 			}
 		}
 	}
 
-	result.Devices = make([]inventory.Device, 0, len(seen))
-	for _, d := range seen {
-		result.Devices = append(result.Devices, d)
+	result.Devices = make([]inventory.Device, 0, len(order))
+	for _, k := range order {
+		result.Devices = append(result.Devices, seen[k])
 	}
 
 	if progress != nil {
@@ -69,6 +78,58 @@ func Analyze(path string, progress func(string)) (*AnalyzeResult, error) {
 	}
 
 	return result, nil
+}
+
+func passiveDeviceKey(d inventory.Device) string {
+	if d.Protocol == "bacnet" && d.Extra != nil && d.Extra["device_instance"] != "" {
+		return d.IP + "#bacnet:" + d.Extra["device_instance"]
+	}
+	return d.IP
+}
+
+func isPassivePlaceholderVendor(v string) bool {
+	return v == "" || v == "Unknown" || strings.HasPrefix(v, "Vendor(") || strings.HasPrefix(v, "Vendor ")
+}
+
+func isPassivePlaceholderModel(m string) bool {
+	return m == "" || strings.HasPrefix(m, "BACnet Device #") || m == "TwinCAT System" || m == "TwinCAT ADS Router"
+}
+
+func mergePassiveDevice(base, incoming inventory.Device) inventory.Device {
+	if isPassivePlaceholderVendor(base.Vendor) && !isPassivePlaceholderVendor(incoming.Vendor) {
+		base.Vendor = incoming.Vendor
+	}
+	if isPassivePlaceholderModel(base.Model) && incoming.Model != "" && !isPassivePlaceholderModel(incoming.Model) {
+		base.Model = incoming.Model
+	} else if base.Model == "" && incoming.Model != "" {
+		base.Model = incoming.Model
+	}
+	if base.Firmware == "" && incoming.Firmware != "" {
+		base.Firmware = incoming.Firmware
+	}
+	if base.Hostname == "" && incoming.Hostname != "" {
+		base.Hostname = incoming.Hostname
+	}
+	if base.Serial == "" {
+		base.Serial = incoming.Serial
+	}
+	if base.MAC == "" {
+		base.MAC = incoming.MAC
+	}
+	if base.OrderNum == "" {
+		base.OrderNum = incoming.OrderNum
+	}
+	if len(incoming.Extra) > 0 {
+		if base.Extra == nil {
+			base.Extra = make(map[string]string, len(incoming.Extra))
+		}
+		for k, v := range incoming.Extra {
+			if base.Extra[k] == "" && v != "" {
+				base.Extra[k] = v
+			}
+		}
+	}
+	return base
 }
 
 // tryParseProtocol attempts to parse the frame payload as an ICS protocol response.
@@ -80,7 +141,7 @@ func tryParseProtocol(f *Frame) *inventory.Device {
 	srcIP := f.SrcIP.String()
 
 	// Dispatch based on source port (response from device)
-	switch f.SrcPort {
+	switch int(f.SrcPort) {
 	case discover.EIPPort:
 		return tryCIP(srcIP, f.Payload)
 	case discover.S7Port:
@@ -95,14 +156,26 @@ func tryParseProtocol(f *Frame) *inventory.Device {
 		return tryFINS(srcIP, f.Payload)
 	case discover.SRTPPort:
 		return trySRTP(srcIP, f.Payload)
+	case discover.ADSPort:
+		return tryADSTCP(srcIP, f.Payload)
+	case discover.ADSUDPPort:
+		return tryADSUDP(srcIP, f.Payload)
+	case discover.SICKPortA, discover.SICKPortB, discover.SICKPortCoLa2:
+		return trySICK(srcIP, int(f.SrcPort), f.Payload)
+	case discover.OPCUAPort:
+		return discover.ParseOPCUAResponseFrame(srcIP, f.Payload)
+	case discover.FoxPort:
+		return tryFox(srcIP, int(f.SrcPort), f.Payload)
 	}
 
-	// Also check destination port for broadcast/multicast responses
-	switch f.DstPort {
+	// Also check destination port for broadcast/multicast/ephemeral-source UDP responses
+	switch int(f.DstPort) {
 	case discover.EIPPort:
 		return tryCIP(srcIP, f.Payload)
 	case discover.BACnetPort:
 		return tryBACnet(srcIP, f.Payload)
+	case discover.ADSUDPPort:
+		return tryADSUDP(srcIP, f.Payload)
 	}
 
 	return nil
@@ -121,18 +194,8 @@ func tryCIP(ip string, data []byte) *inventory.Device {
 }
 
 func tryS7(ip string, data []byte) *inventory.Device {
-	// S7 over TPKT — strip TPKT header first
-	tpktPayload, err := discover.ParseTPKT(data)
-	if err != nil || len(tpktPayload) < 3 {
-		return nil
-	}
-	// Skip COTP header (variable length, minimum 2 bytes: length + PDU type)
-	cotpLen := int(tpktPayload[0]) + 1
-	if cotpLen >= len(tpktPayload) {
-		return nil
-	}
-	s7Data := tpktPayload[cotpLen:]
-	id, err := discover.ParseSZLResponse(s7Data)
+	// ParseSZLResponse owns TPKT/COTP framing; do not strip it twice.
+	id, err := discover.ParseSZLResponse(data)
 	if err != nil || id == nil {
 		return nil
 	}
@@ -156,6 +219,8 @@ func tryModbus(ip string, data []byte) *inventory.Device {
 		VendorName:  objects[0],
 		ProductCode: objects[1],
 		Revision:    objects[2],
+		ProductName: objects[4],
+		ModelName:   objects[5],
 	}
 	dev := discover.ModbusIdentityToDevice(ip, id)
 	if dev.Model == "" {
@@ -182,22 +247,115 @@ func trySLMP(ip string, data []byte) *inventory.Device {
 
 func tryBACnet(ip string, data []byte) *inventory.Device {
 	_, bvlcPayload, err := discover.ParseBVLC(data)
-	if err != nil || len(bvlcPayload) < 4 {
+	if err != nil || len(bvlcPayload) < 3 {
 		return nil
 	}
-	deviceInstance, vendorID, err := discover.ParseIAmResponse(bvlcPayload)
-	if err != nil {
+	apdu, srcNet, srcAddr, err := discover.ParseBACnetNPDU(bvlcPayload)
+	if err != nil || len(apdu) < 2 {
 		return nil
 	}
-	id := &discover.BACnetIdentity{
-		DeviceInstance: deviceInstance,
-		VendorID:       vendorID,
-		VendorName:     discover.BACnetVendorName(vendorID),
+
+	if deviceInstance, vendorID, err := discover.ParseIAmResponse(apdu); err == nil {
+		id := &discover.BACnetIdentity{
+			DeviceInstance: deviceInstance,
+			VendorID:       vendorID,
+			VendorName:     discover.BACnetVendorName(vendorID),
+			SourceNet:      srcNet,
+			SourceAddr:     srcAddr,
+		}
+		dev := discover.BACnetIdentityToDevice(ip, id)
+		if dev.Model == "" {
+			return nil
+		}
+		return &dev
 	}
-	dev := discover.BACnetIdentityToDevice(ip, id)
-	if dev.Model == "" {
+
+	if _, deviceInstance, propID, val, err := discover.ParseReadPropertyAck(apdu); err == nil && val != "" {
+		id := &discover.BACnetIdentity{
+			DeviceInstance: deviceInstance,
+			SourceNet:      srcNet,
+			SourceAddr:     srcAddr,
+		}
+		switch propID {
+		case 70: // Model_Name
+			id.ModelName = val
+		case 44, 12: // Firmware_Revision, Application_Software_Version
+			id.FirmwareRevision = val
+		case 121: // Vendor_Name
+			id.VendorName = val
+		case 77: // Object_Name
+			id.ObjectName = val
+		case 58: // Location
+			id.Location = val
+		default:
+			return nil
+		}
+		dev := discover.BACnetIdentityToDevice(ip, id)
+		if id.VendorName == "" {
+			dev.Vendor = "Unknown"
+		}
+		if dev.Extra == nil {
+			dev.Extra = make(map[string]string)
+		}
+		dev.Extra["device_instance"] = strconv.FormatUint(uint64(deviceInstance), 10)
+		return &dev
+	}
+
+	return nil
+}
+
+func tryADSTCP(ip string, data []byte) *inventory.Device {
+	id, err := discover.ParseADSReadDeviceInfoFrame(data)
+	if err != nil || id == nil {
 		return nil
 	}
+	dev := discover.ADSIdentityToDevice(ip, discover.ADSPort, id)
+	return &dev
+}
+
+func tryADSUDP(ip string, data []byte) *inventory.Device {
+	id, meta, err := discover.ParseADSUDPDiscoveryResponse(data)
+	if err != nil || id == nil {
+		return nil
+	}
+	dev := discover.ADSIdentityToDevice(ip, discover.ADSUDPPort, id)
+	if h := meta["hostname"]; h != "" {
+		dev.Hostname = h
+	}
+	if osStr := meta["os"]; osStr != "" {
+		if dev.Extra == nil {
+			dev.Extra = make(map[string]string)
+		}
+		dev.Extra["os"] = osStr
+	}
+	return &dev
+}
+
+func trySICK(ip string, port int, data []byte) *inventory.Device {
+	id, err := discover.ParseSICKCoLaFrame(data, port)
+	if err != nil || id == nil || id.Model == "" {
+		return nil
+	}
+	return &inventory.Device{
+		IP:       ip,
+		Vendor:   "SICK",
+		Model:    id.Model,
+		Firmware: id.Firmware,
+		Protocol: "sick-cola",
+		Port:     port,
+	}
+}
+
+func tryFox(ip string, port int, data []byte) *inventory.Device {
+	id, err := discover.ParseFoxHello(string(data))
+	if err != nil || id == nil {
+		return nil
+	}
+	// Distinguish Niagara station greeting from minimal client hello request
+	if id.AppVersion == "" && id.BrandID == "" && id.StationName == "" {
+		return nil
+	}
+	dev := discover.FoxIdentityToDevice(ip, port, false, id)
 	return &dev
 }
 

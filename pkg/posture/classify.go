@@ -48,8 +48,13 @@ var PortServiceName = map[int]string{
 	443:   "HTTPS",
 	445:   "SMB",
 	502:   "Modbus",
+	1911:  "Niagara Fox",
+	2111:  "SICK CoLa",
+	2112:  "SICK CoLa",
+	2122:  "SICK CoLa-2",
 	3389:  "RDP",
 	4840:  "OPC UA",
+	4911:  "Niagara FoxS",
 	5007:  "MELSEC",
 	8080:  "HTTP-alt",
 	8443:  "HTTPS-alt",
@@ -57,6 +62,8 @@ var PortServiceName = map[int]string{
 	18245: "GE-SRTP",
 	44818: "CIP/EIP",
 	47808: "BACnet",
+	48898: "TwinCAT ADS",
+	48899: "ADS-UDP",
 }
 
 // ClassifyHosts labels each scanned host and enriches with known asset data.

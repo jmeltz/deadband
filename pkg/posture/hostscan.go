@@ -13,16 +13,22 @@ import (
 // Well-known ports grouped by role.
 var (
 	// OTPorts are probed first. These are lightweight identity-read ports
-	// used by ICS protocols — safe to TCP-connect on OT networks.
+	// used by ICS, intralogistics/ASRS, and HVAC/BMS protocols.
 	OTPorts = []int{
 		44818, // CIP/EtherNet/IP
 		102,   // S7comm
 		502,   // Modbus TCP
-		47808, // BACnet/IP
+		47808, // BACnet/IP (UDP)
 		5007,  // MELSEC/SLMP
 		9600,  // FINS
 		18245, // GE-SRTP
 		4840,  // OPC UA
+		48898, // Beckhoff TwinCAT ADS
+		2111,  // SICK SOPAS CoLa-A/B Aux
+		2112,  // SICK SOPAS CoLa-A/B Host
+		2122,  // SICK SOPAS CoLa-2
+		1911,  // Tridium Niagara Fox
+		4911,  // Tridium Niagara FoxS
 	}
 
 	// ITPorts are probed second and ONLY on hosts that did NOT respond
@@ -184,12 +190,9 @@ func scanPorts(ips []string, ports []int, timeout time.Duration, concurrency int
 				defer wg.Done()
 				defer func() { <-sem }()
 
-				addr := net.JoinHostPort(ip, strconv.Itoa(port))
-				conn, err := net.DialTimeout("tcp", addr, timeout)
-				if err != nil {
+				if !probeHostPort(ip, port, timeout) {
 					return
 				}
-				conn.Close()
 
 				mu.Lock()
 				results = append(results, probeResult{ip: ip, port: port})
@@ -200,4 +203,48 @@ func scanPorts(ips []string, ports []int, timeout time.Duration, concurrency int
 
 	wg.Wait()
 	return results
+}
+
+// probeHostPort checks whether port is responsive on ip, using read-only UDP
+// application probes for UDP-native protocols (BACnet/47808 and SNMP/161) and
+// TCP connect for TCP services.
+func probeHostPort(ip string, port int, timeout time.Duration) bool {
+	switch port {
+	case discover.BACnetPort:
+		return probeBACnetUDP(ip, port, timeout)
+	case discover.SNMPPort:
+		return discover.SNMPGetSysDescr(ip, port, timeout) != ""
+	default:
+		addr := net.JoinHostPort(ip, strconv.Itoa(port))
+		conn, err := net.DialTimeout("tcp", addr, timeout)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+}
+
+// probeBACnetUDP sends a minimal 8-byte read-only BACnet/IP Who-Is unicast frame
+// and checks for a valid BVLC response header.
+func probeBACnetUDP(ip string, port int, timeout time.Duration) bool {
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	conn, err := net.DialTimeout("udp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	whoIs := []byte{0x81, 0x0A, 0x00, 0x08, 0x01, 0x00, 0x10, 0x08}
+	if _, err := conn.Write(whoIs); err != nil {
+		return false
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil || n < 4 {
+		return false
+	}
+	_, payload, err := discover.ParseBVLC(buf[:n])
+	return err == nil && len(payload) >= 2
 }

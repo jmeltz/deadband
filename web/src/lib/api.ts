@@ -28,6 +28,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  previewQuery: (body: {ids:string[];purpose:"enrich"|"verify"}) => request<import("./types").QueryRecord>("/api/queries/preview", {method:"POST",body:JSON.stringify(body)}),
+  executeQuery: (id:string,plan_hash:string) => request<import("./types").QueryRecord>(`/api/queries/${encodeURIComponent(id)}/execute`, {method:"POST",body:JSON.stringify({plan_hash})}),
+  queryStatus: (id:string) => request<import("./types").QueryRecord>(`/api/queries/${encodeURIComponent(id)}`),
+  queryHistory: () => request<import("./types").QueryRecord[]>("/api/queries"),
+  cancelQuery: (id:string) => request<{status:string}>(`/api/queries/${encodeURIComponent(id)}/cancel`,{method:"POST",body:"{}"}),
+
   health: () => request<import("./types").HealthResponse>("/api/health"),
 
   dbStats: () => request<import("./types").DbStats>("/api/db/stats"),
@@ -91,6 +97,7 @@ export const api = {
     timeout_ms?: number;
     concurrency?: number;
     auto_check?: boolean;
+    include_posture?: boolean;
   }) =>
     request<{ job_id: string; status: string }>("/api/discover", {
       method: "POST",

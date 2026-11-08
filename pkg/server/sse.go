@@ -12,13 +12,11 @@ import (
 	"time"
 
 	"path/filepath"
-	"strings"
 
 	"github.com/jmeltz/deadband/pkg/asset"
 	"github.com/jmeltz/deadband/pkg/discover"
 	"github.com/jmeltz/deadband/pkg/enrichment"
 	"github.com/jmeltz/deadband/pkg/inventory"
-	"github.com/jmeltz/deadband/pkg/matcher"
 	"github.com/jmeltz/deadband/pkg/posture"
 	"github.com/jmeltz/deadband/pkg/updater"
 )
@@ -40,15 +38,15 @@ const (
 )
 
 type discoverJob struct {
-	ID       string              `json:"job_id"`
-	Status   jobStatus           `json:"status"`
-	Error    string              `json:"error,omitempty"`
-	Devices  []inventory.Device  `json:"devices,omitempty"`
-	Results  *checkResponse      `json:"check_results,omitempty"`
-	Progress []string            `json:"progress,omitempty"`
+	ID       string             `json:"job_id"`
+	Status   jobStatus          `json:"status"`
+	Error    string             `json:"error,omitempty"`
+	Devices  []inventory.Device `json:"devices,omitempty"`
+	Results  *checkResponse     `json:"check_results,omitempty"`
+	Progress []string           `json:"progress,omitempty"`
 
-	mu       sync.Mutex
-	subs     []chan string
+	mu   sync.Mutex
+	subs []chan string
 }
 
 func (j *discoverJob) addProgress(msg string) {
@@ -94,8 +92,8 @@ func (j *discoverJob) complete(devices []inventory.Device, results *checkRespons
 }
 
 var (
-	discoverJobs   sync.Map
-	discoverMu     sync.Mutex // Limits to one concurrent discovery
+	discoverJobs sync.Map
+	discoverMu   sync.Mutex // Limits to one concurrent discovery
 )
 
 // runScheduledDiscovery executes a discovery scan triggered by the scheduler.
@@ -137,7 +135,8 @@ func (s *Server) runScheduledDiscovery(sched discover.Schedule) {
 	// Auto-import
 	var importNew, importUpdated int
 	if len(devices) > 0 {
-		path := asset.DefaultPath()
+		assetStoreMu.Lock()
+		path := s.assetStorePath()
 		store := asset.LoadOrEmpty(path)
 		result := store.Import(devices, "discovery")
 		if s.siteStore != nil {
@@ -149,6 +148,7 @@ func (s *Server) runScheduledDiscovery(sched discover.Schedule) {
 			importNew = result.Added
 			importUpdated = result.Updated
 		}
+		assetStoreMu.Unlock()
 	}
 
 	// Auto-check if configured
@@ -160,9 +160,11 @@ func (s *Server) runScheduledDiscovery(sched discover.Schedule) {
 	}
 
 	// Posture analysis
-	s.runPostureAnalysis(sched.CIDR, func(msg string) {
-		log.Printf("[deadband] [sched:%s] %s", sched.ID[:8], msg)
-	})
+	if sched.IncludePosture {
+		s.runPostureAnalysis(sched.CIDR, func(msg string) {
+			log.Printf("[deadband] [sched:%s] %s", sched.ID, msg)
+		})
+	}
 
 	jobID := sched.ID + "-" + fmt.Sprintf("%d", startedAt.Unix())
 	s.persistJobRecord(jobID, sched.CIDR, string(mode), "complete", "", startedAt, len(devices), importNew, importUpdated)
@@ -171,9 +173,9 @@ func (s *Server) runScheduledDiscovery(sched discover.Schedule) {
 // --- Update job management ---
 
 type updateJob struct {
-	mu       sync.Mutex
-	subs     []chan string
-	done     bool
+	mu   sync.Mutex
+	subs []chan string
+	done bool
 }
 
 func (j *updateJob) addProgress(msg string) {
@@ -263,12 +265,13 @@ func fetchEnrichment(dbPath string, progress func(string)) {
 // --- Discovery handlers ---
 
 type discoverRequest struct {
-	CIDR        string `json:"cidr"`
-	Mode        string `json:"mode"`
-	TimeoutMS   int    `json:"timeout_ms"`
-	Concurrency int    `json:"concurrency"`
-	AutoCheck   bool   `json:"auto_check"`
-	AutoImport  *bool  `json:"auto_import,omitempty"` // default true
+	CIDR           string `json:"cidr"`
+	Mode           string `json:"mode"`
+	TimeoutMS      int    `json:"timeout_ms"`
+	Concurrency    int    `json:"concurrency"`
+	AutoCheck      bool   `json:"auto_check"`
+	IncludePosture bool   `json:"include_posture"`
+	AutoImport     *bool  `json:"auto_import,omitempty"` // default true
 }
 
 func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +282,11 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CIDR == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "cidr is required"})
+		return
+	}
+
+	if !validDiscoveryMode(req.Mode) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "unsupported discovery mode"})
 		return
 	}
 
@@ -321,6 +329,8 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		mode = discover.ModeADS
 	case "sick":
 		mode = discover.ModeSICK
+	case "fox":
+		mode = discover.ModeFox
 	case "ancillary":
 		mode = discover.ModeAncillary
 	case "haas":
@@ -363,7 +373,8 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		var importNew, importUpdated int
 		if autoImport && len(devices) > 0 {
 			job.addProgress("Importing devices into asset inventory...")
-			path := asset.DefaultPath()
+			assetStoreMu.Lock()
+			path := s.assetStorePath()
 			store := asset.LoadOrEmpty(path)
 			result := store.Import(devices, "discovery")
 			if s.siteStore != nil {
@@ -376,6 +387,7 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 				importUpdated = result.Updated
 				job.addProgress(fmt.Sprintf("Assets: %d added, %d updated (%d total)", result.Added, result.Updated, result.Total))
 			}
+			assetStoreMu.Unlock()
 		}
 
 		// Auto-check vulnerabilities
@@ -438,7 +450,7 @@ func (s *Server) runPostureAnalysis(cidr string, progress func(string)) {
 
 	// Load assets first so the scanner can pre-tag known OT devices
 	// and skip IT probes on them (sensitivity-ordered scanning).
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 
 	hosts, err := posture.ScanSubnetWithAssets(cidr, 2*time.Second, 100, store.Assets, func(msg string) {
 		progress("Posture: " + msg)
@@ -509,64 +521,23 @@ func (s *Server) runPostureAnalysis(cidr string, progress func(string)) {
 
 // writeVulnStateToAssets writes check results back to the asset store.
 func (s *Server) writeVulnStateToAssets(devices []inventory.Device, resp checkResponse) {
-	path := asset.DefaultPath()
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 	if len(store.Assets) == 0 {
 		return
 	}
 
-	// Index assets
-	idx := make(map[string]*asset.Asset, len(store.Assets))
-	for i := range store.Assets {
-		a := &store.Assets[i]
-		key := strings.ToLower(a.IP + "|" + a.Vendor + "|" + a.Model)
-		idx[key] = a
-	}
-
-	now := time.Now().UTC()
-	// Re-run matcher to get full Result objects (resp only has the HTTP-formatted output)
-	filterOpts := matcher.FilterOpts{}
-	results := matcher.MatchAll(devices, s.db, filterOpts)
-
-	for _, r := range results {
-		key := strings.ToLower(r.Device.IP + "|" + r.Device.Vendor + "|" + r.Device.Model)
-		a, ok := idx[key]
-		if !ok {
-			continue
-		}
-
-		bestConf := "LOW"
-		for _, m := range r.Matches {
-			c := strings.ToUpper(string(m.Confidence))
-			if c == "HIGH" || (c == "MEDIUM" && bestConf != "HIGH") {
-				bestConf = c
+	// Include zero-match components and correlate with the same slot/routed key
+	// used by inventory import, rather than a coarse IP/vendor/model key.
+	for _, d := range devices {
+		for _, a := range store.Assets {
+			if !asset.SameComponent(a, d) {
+				continue
 			}
+			store.UpdateVulnState(a.ID, s.assessDevice(deviceForAsset(a)))
 		}
-
-		vs := &asset.VulnState{
-			CheckedAt:  now,
-			Status:     strings.ToUpper(r.Status),
-			Confidence: bestConf,
-		}
-		for _, m := range r.Matches {
-			va := asset.VulnAdvisory{
-				ID:     m.Advisory.ID,
-				Title:  m.Advisory.Title,
-				CVEs:   m.Advisory.CVEs,
-				CVSSv3: m.Advisory.CVSSv3Max,
-				KEV:    m.KEV,
-				RiskScore: m.RiskScore,
-			}
-			vs.CVECount += len(m.Advisory.CVEs)
-			if m.KEV {
-				vs.KEVCount++
-			}
-			if m.RiskScore > vs.RiskScore {
-				vs.RiskScore = m.RiskScore
-			}
-			vs.Advisories = append(vs.Advisories, va)
-		}
-		a.VulnState = vs
 	}
 
 	asset.Save(path, store)
@@ -701,4 +672,3 @@ func (s *Server) handleUpdateEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: {\"type\":\"complete\"}\n\n")
 	flusher.Flush()
 }
-

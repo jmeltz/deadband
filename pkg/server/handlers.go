@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jmeltz/deadband/pkg/acl"
-	"github.com/jmeltz/deadband/pkg/integration"
 	"github.com/jmeltz/deadband/pkg/advisory"
 	"github.com/jmeltz/deadband/pkg/asset"
 	"github.com/jmeltz/deadband/pkg/baseline"
@@ -24,6 +23,7 @@ import (
 	"github.com/jmeltz/deadband/pkg/diff"
 	"github.com/jmeltz/deadband/pkg/discover"
 	"github.com/jmeltz/deadband/pkg/enrichment"
+	"github.com/jmeltz/deadband/pkg/integration"
 	"github.com/jmeltz/deadband/pkg/inventory"
 	"github.com/jmeltz/deadband/pkg/matcher"
 	"github.com/jmeltz/deadband/pkg/output"
@@ -40,20 +40,20 @@ type healthResponse struct {
 }
 
 type statsResponse struct {
-	AdvisoryCount   int               `json:"advisory_count"`
-	Updated         string            `json:"updated"`
-	Source          string            `json:"source"`
-	PreviousUpdated *string           `json:"previous_updated"`
-	AddedSinceLast  int               `json:"added_since_last"`
-	ChronicCount    int               `json:"chronic_count"`
-	Vendors         map[string]int    `json:"vendors"`
+	AdvisoryCount   int            `json:"advisory_count"`
+	Updated         string         `json:"updated"`
+	Source          string         `json:"source"`
+	PreviousUpdated *string        `json:"previous_updated"`
+	AddedSinceLast  int            `json:"added_since_last"`
+	ChronicCount    int            `json:"chronic_count"`
+	Vendors         map[string]int `json:"vendors"`
 }
 
 type advisoryListResponse struct {
-	Total      int                  `json:"total"`
-	Page       int                  `json:"page"`
-	PerPage    int                  `json:"per_page"`
-	Advisories []advisory.Advisory  `json:"advisories"`
+	Total      int                 `json:"total"`
+	Page       int                 `json:"page"`
+	PerPage    int                 `json:"per_page"`
+	Advisories []advisory.Advisory `json:"advisories"`
 }
 
 type checkRequest struct {
@@ -64,21 +64,22 @@ type checkRequest struct {
 }
 
 type checkResponse struct {
-	CheckedAt      string               `json:"checked_at"`
-	DBUpdated      string               `json:"db_updated"`
-	DevicesChecked int                  `json:"devices_checked"`
-	Results        []checkDeviceResult  `json:"results"`
-	Summary        checkSummary         `json:"summary"`
+	Devices        []inventory.Device  `json:"devices,omitempty"`
+	CheckedAt      string              `json:"checked_at"`
+	DBUpdated      string              `json:"db_updated"`
+	DevicesChecked int                 `json:"devices_checked"`
+	Results        []checkDeviceResult `json:"results"`
+	Summary        checkSummary        `json:"summary"`
 }
 
 type checkDeviceResult struct {
-	IP         string           `json:"ip"`
-	Vendor     string           `json:"vendor"`
-	Model      string           `json:"model"`
-	Firmware   string           `json:"firmware"`
-	Status     string           `json:"status"`
-	Confidence string           `json:"confidence"`
-	Advisories []checkAdvisory  `json:"advisories,omitempty"`
+	IP         string          `json:"ip"`
+	Vendor     string          `json:"vendor"`
+	Model      string          `json:"model"`
+	Firmware   string          `json:"firmware"`
+	Status     string          `json:"status"`
+	Confidence string          `json:"confidence"`
+	Advisories []checkAdvisory `json:"advisories,omitempty"`
 }
 
 type checkAdvisory struct {
@@ -110,12 +111,12 @@ type diffRequest struct {
 }
 
 type diffResponse struct {
-	ComparedAt         string              `json:"compared_at"`
-	Summary            diffSummary         `json:"summary"`
-	NewDevices         []diffDevice        `json:"new_devices"`
-	RemovedDevices     []diffDevice        `json:"removed_devices"`
-	FirmwareChanges    []diffFWChange      `json:"firmware_changes"`
-	NewVulnerabilities []diffNewVuln       `json:"new_vulnerabilities"`
+	ComparedAt         string         `json:"compared_at"`
+	Summary            diffSummary    `json:"summary"`
+	NewDevices         []diffDevice   `json:"new_devices"`
+	RemovedDevices     []diffDevice   `json:"removed_devices"`
+	FirmwareChanges    []diffFWChange `json:"firmware_changes"`
+	NewVulnerabilities []diffNewVuln  `json:"new_vulnerabilities"`
 }
 
 type diffSummary struct {
@@ -378,6 +379,7 @@ func (s *Server) handleCheckUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := s.runCheck(devices, minConfidence, minCVSS, vendor)
+	resp.Devices = devices
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -560,10 +562,10 @@ func parseUploadedInventory(r *http.Request, fieldName string) ([]inventory.Devi
 }
 
 type baselineResponse struct {
-	Exists    bool                `json:"exists"`
-	UpdatedAt string              `json:"updated_at,omitempty"`
-	Devices   []inventory.Device  `json:"devices,omitempty"`
-	Count     int                 `json:"count"`
+	Exists    bool               `json:"exists"`
+	UpdatedAt string             `json:"updated_at,omitempty"`
+	Devices   []inventory.Device `json:"devices,omitempty"`
+	Count     int                `json:"count"`
 }
 
 func (s *Server) handleGetBaseline(w http.ResponseWriter, r *http.Request) {
@@ -669,7 +671,7 @@ type assetListResponse struct {
 }
 
 func (s *Server) handleGetAssets(w http.ResponseWriter, r *http.Request) {
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 
 	// Auto-enrich unassigned assets with site from CIDR matching (read-time only)
 	if s.siteStore != nil {
@@ -719,6 +721,8 @@ type assetImportRequest struct {
 }
 
 func (s *Server) handleImportAssets(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	var req assetImportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
@@ -732,7 +736,7 @@ func (s *Server) handleImportAssets(w http.ResponseWriter, r *http.Request) {
 		req.Source = "manual"
 	}
 
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 	result := store.Import(req.Devices, req.Source)
 
@@ -750,6 +754,8 @@ func (s *Server) handleImportAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateAsset(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	id := r.PathValue("id")
 
 	var patch asset.AssetPatch
@@ -758,7 +764,7 @@ func (s *Server) handleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 
 	if !store.Update(id, patch) {
@@ -775,9 +781,11 @@ func (s *Server) handleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	id := r.PathValue("id")
 
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 
 	if !store.Delete(id) {
@@ -794,15 +802,17 @@ func (s *Server) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 type bulkTagRequest struct {
-	IDs    []string `json:"ids"`
-	AddTags    []string `json:"add_tags,omitempty"`
-	RemoveTags []string `json:"remove_tags,omitempty"`
-	SetSite    *string  `json:"set_site,omitempty"`
-	SetZone    *string  `json:"set_zone,omitempty"`
-	SetCriticality *string `json:"set_criticality,omitempty"`
+	IDs            []string `json:"ids"`
+	AddTags        []string `json:"add_tags,omitempty"`
+	RemoveTags     []string `json:"remove_tags,omitempty"`
+	SetSite        *string  `json:"set_site,omitempty"`
+	SetZone        *string  `json:"set_zone,omitempty"`
+	SetCriticality *string  `json:"set_criticality,omitempty"`
 }
 
 func (s *Server) handleBulkUpdateAssets(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	var req bulkTagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
@@ -813,7 +823,7 @@ func (s *Server) handleBulkUpdateAssets(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 
 	updated := 0
@@ -857,7 +867,7 @@ func (s *Server) handleBulkUpdateAssets(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 
 	a := store.Get(id)
 	if a == nil {
@@ -875,20 +885,24 @@ type checkAssetsRequest struct {
 }
 
 type checkAssetsResponse struct {
-	Checked     int `json:"checked"`
-	Vulnerable  int `json:"vulnerable"`
-	Potential   int `json:"potential"`
-	OK          int `json:"ok"`
+	Checked    int `json:"checked"`
+	Vulnerable int `json:"vulnerable"`
+	Potential  int `json:"potential"`
+	OK         int `json:"ok"`
+	Unknown    int `json:"unknown"`
+	NoMatch    int `json:"no_match"`
 }
 
 func (s *Server) handleCheckAssets(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	var req checkAssetsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
 
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 
 	if len(store.Assets) == 0 {
@@ -922,74 +936,21 @@ func (s *Server) handleCheckAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert assets to devices for matching
-	devices := make([]inventory.Device, len(targets))
-	assetIDs := make([]string, len(targets))
-	for i, a := range targets {
-		devices[i] = inventory.Device{
-			IP: a.IP, Vendor: a.Vendor, Model: a.Model, Firmware: a.Firmware,
-		}
-		assetIDs[i] = a.ID
-	}
-
-	// Run vulnerability check
-	filterOpts := matcher.FilterOpts{}
-	results := matcher.MatchAll(devices, s.db, filterOpts)
-	now := time.Now().UTC()
-
 	resp := checkAssetsResponse{Checked: len(targets)}
-
-	// Build result map keyed by IP+Vendor+Model for matching back to assets
-	type resultKey struct{ ip, vendor, model string }
-	resultMap := make(map[resultKey]*matcher.Result)
-	for i := range results {
-		r := &results[i]
-		resultMap[resultKey{r.Device.IP, r.Device.Vendor, r.Device.Model}] = r
-	}
-
-	// Write vuln state back to assets
-	for i, a := range targets {
-		_ = assetIDs[i]
-		key := resultKey{a.IP, a.Vendor, a.Model}
-		r, ok := resultMap[key]
-
-		state := &asset.VulnState{CheckedAt: now, Status: "OK"}
-
-		if ok && len(r.Matches) > 0 {
-			state.Status = r.Status
-			if len(r.Matches) > 0 {
-				state.Confidence = string(r.Matches[0].Confidence)
-			}
-			for _, m := range r.Matches {
-				va := asset.VulnAdvisory{
-					ID:     m.Advisory.ID,
-					Title:  strings.TrimSpace(m.Advisory.Title),
-					CVEs:   m.Advisory.CVEs,
-					CVSSv3: m.Advisory.CVSSv3Max,
-				}
-				if s.edb != nil && s.edb.Loaded() {
-					ae := s.edb.EnrichAdvisory(m.Advisory.CVEs, m.Advisory.CVSSv3Max)
-					va.KEV = ae.KEV
-					va.RiskScore = ae.RiskScore
-					state.KEVCount += boolToInt(ae.KEV)
-				}
-				state.CVECount += len(m.Advisory.CVEs)
-				state.Advisories = append(state.Advisories, va)
-				if va.RiskScore > state.RiskScore {
-					state.RiskScore = va.RiskScore
-				}
-			}
-		}
-
+	for _, a := range targets {
+		state := s.assessDevice(deviceForAsset(a))
 		store.UpdateVulnState(a.ID, state)
-
-		switch strings.ToUpper(state.Status) {
+		switch state.Status {
 		case "VULNERABLE":
 			resp.Vulnerable++
 		case "POTENTIAL":
 			resp.Potential++
-		default:
+		case "OK":
 			resp.OK++
+		case "NO_MATCH":
+			resp.NoMatch++
+		default:
+			resp.Unknown++
 		}
 	}
 
@@ -1060,6 +1021,15 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "cidr is required"})
 		return
 	}
+	if !validDiscoveryMode(sched.Mode) {
+		writeJSON(w, 400, errorResponse{Error: "unsupported discovery mode"})
+		return
+	}
+	if _, err := discover.ExpandCIDR(sched.CIDR); err != nil {
+		writeJSON(w, 400, errorResponse{Error: err.Error()})
+		return
+	}
+
 	if sched.ID == "" {
 		sched.ID = newScheduleID()
 	}
@@ -1108,7 +1078,7 @@ func newScheduleID() string {
 // --- Asset summary + export handlers ---
 
 func (s *Server) handleAssetSummary(w http.ResponseWriter, r *http.Request) {
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 	writeJSON(w, http.StatusOK, store.ComputeSummary())
 }
 
@@ -1118,7 +1088,7 @@ func (s *Server) handleAssetExport(w http.ResponseWriter, r *http.Request) {
 		format = "csv"
 	}
 
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 	assets := store.Filter(asset.FilterOpts{})
 
 	switch format {
@@ -1212,7 +1182,9 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReassignSites(w http.ResponseWriter, r *http.Request) {
-	path := asset.DefaultPath()
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 	count := s.siteStore.AssignAll(store.Assets)
 	if err := asset.Save(path, store); err != nil {
@@ -1293,6 +1265,8 @@ func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request) {
 // --- .dbd import handler ---
 
 func (s *Server) handleImportDBD(w http.ResponseWriter, r *http.Request) {
+	assetStoreMu.Lock()
+	defer assetStoreMu.Unlock()
 	dbd, err := output.ReadDBDFull(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("invalid .dbd file: %v", err)})
@@ -1340,7 +1314,7 @@ func (s *Server) handleImportDBD(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Import assets with merge logic
-	path := asset.DefaultPath()
+	path := s.assetStorePath()
 	store := asset.LoadOrEmpty(path)
 
 	added, updated := 0, 0
@@ -1348,7 +1322,7 @@ func (s *Server) handleImportDBD(w http.ResponseWriter, r *http.Request) {
 	dedupIdx := make(map[string]int, len(store.Assets))
 	for i, a := range store.Assets {
 		idIdx[a.ID] = i
-		dedupIdx[strings.ToLower(a.IP+"|"+a.Vendor+"|"+a.Model)] = i
+		dedupIdx[asset.ComponentKey(a)] = i
 	}
 
 	for _, incoming := range dbd.Assets {
@@ -1359,7 +1333,7 @@ func (s *Server) handleImportDBD(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if existIdx < 0 {
-			key := strings.ToLower(incoming.IP + "|" + incoming.Vendor + "|" + incoming.Model)
+			key := asset.ComponentKey(incoming)
 			if idx, ok := dedupIdx[key]; ok {
 				existIdx = idx
 			}
@@ -1419,6 +1393,11 @@ type postureScanRequest struct {
 }
 
 func (s *Server) handlePostureScan(w http.ResponseWriter, r *http.Request) {
+	if !discoverMu.TryLock() {
+		writeJSON(w, http.StatusConflict, errorResponse{Error: "another discovery or enrichment job is running"})
+		return
+	}
+	defer discoverMu.Unlock()
 	var req postureScanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
@@ -1458,7 +1437,7 @@ func (s *Server) handlePostureScan(w http.ResponseWriter, r *http.Request) {
 
 	// Load assets first for OT-safe scanning (known OT hosts skip IT probes)
 	sendEvent("progress", fmt.Sprintf("Starting posture scan on %s...", req.CIDR))
-	store := asset.LoadOrEmpty(asset.DefaultPath())
+	store := asset.LoadOrEmpty(s.assetStorePath())
 
 	hosts, err := posture.ScanSubnetWithAssets(req.CIDR, timeout, concurrency, store.Assets, func(msg string) {
 		sendEvent("progress", msg)
@@ -2066,4 +2045,3 @@ func (s *Server) handleTestASAConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
-

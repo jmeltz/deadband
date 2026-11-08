@@ -30,6 +30,7 @@ export function useDiscover() {
       timeout_ms?: number;
       concurrency?: number;
       auto_check?: boolean;
+      include_posture?: boolean;
     }) => {
       setStatus("running");
       setProgress([]);

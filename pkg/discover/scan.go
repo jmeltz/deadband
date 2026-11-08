@@ -19,8 +19,13 @@ const (
 	SRTPPort      = 18245
 	OPCUAPort      = 4840
 	ADSPort        = 48898 // Beckhoff TwinCAT AMS/ADS TCP
+	ADSUDPPort     = 48899 // Beckhoff TwinCAT ADS UDP Discovery
 	SICKPortA      = 2111  // SICK SOPAS CoLa-A / CoLa-B Aux
 	SICKPortB      = 2112  // SICK SOPAS CoLa-A / CoLa-B Host
+	SICKPortCoLa2  = 2122  // SICK SOPAS CoLa-2
+	FoxPort        = 1911  // Tridium Niagara Fox
+	FoxSPort       = 4911  // Tridium Niagara FoxS (TLS)
+	SNMPPort       = 161   // SNMPv2c read-only sysDescr fallback
 	HaasPort       = 5051  // Haas NGC Q-command interface
 	FanucFTPPort   = 21   // Fanuc CNC & robot controllers expose an FTP server with a fingerprintable banner
 	FanucFOCASPort = 8193 // Fanuc CNC FOCAS2 embedded Ethernet interface

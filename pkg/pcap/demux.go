@@ -16,6 +16,37 @@ type Frame struct {
 	Payload []byte
 }
 
+// DemuxLink accepts Ethernet, BSD null/loopback and raw IPv4 captures. It does
+// not perform IP fragmentation or TCP stream reassembly; partial protocol
+// frames remain unparsed instead of being guessed from incomplete bytes.
+func DemuxLink(linkType uint32, data []byte) (*Frame, error) {
+	switch linkType {
+	case 1:
+		return DemuxEthernet(data)
+	case 0, 108:
+		if len(data) < 4 {
+			return nil, fmt.Errorf("loopback header too short")
+		}
+		var family uint32
+		if linkType == 108 {
+			family = binary.BigEndian.Uint32(data[:4])
+		} else {
+			family = binary.LittleEndian.Uint32(data[:4])
+			if family != 2 {
+				family = binary.BigEndian.Uint32(data[:4])
+			}
+		}
+		if family != 2 {
+			return nil, fmt.Errorf("loopback family %d is not IPv4", family)
+		}
+		return parseIPv4(data[4:])
+	case 101, 228:
+		return parseIPv4(data)
+	default:
+		return nil, fmt.Errorf("unsupported link type %d", linkType)
+	}
+}
+
 // DemuxEthernet parses an Ethernet frame, extracting IP/TCP/UDP headers
 // and returning the transport payload. Handles 802.1Q VLAN tags.
 func DemuxEthernet(data []byte) (*Frame, error) {
@@ -61,10 +92,17 @@ func parseIPv4(data []byte) (*Frame, error) {
 	}
 
 	proto := data[9]
+	totalLen := int(binary.BigEndian.Uint16(data[2:4]))
+	if totalLen < ihl || totalLen > len(data) {
+		return nil, fmt.Errorf("invalid or truncated IPv4 total length")
+	}
+	if binary.BigEndian.Uint16(data[6:8])&0x3fff != 0 {
+		return nil, fmt.Errorf("fragmented IPv4 unsupported")
+	}
 	srcIP := net.IP(data[12:16])
 	dstIP := net.IP(data[16:20])
 
-	payload := data[ihl:]
+	payload := data[ihl:totalLen]
 
 	switch proto {
 	case 6: // TCP
@@ -105,6 +143,10 @@ func parseUDP(srcIP, dstIP net.IP, data []byte) (*Frame, error) {
 
 	srcPort := binary.BigEndian.Uint16(data[0:2])
 	dstPort := binary.BigEndian.Uint16(data[2:4])
+	length := int(binary.BigEndian.Uint16(data[4:6]))
+	if length < 8 || length > len(data) {
+		return nil, fmt.Errorf("invalid UDP length")
+	}
 
 	return &Frame{
 		SrcIP:   srcIP,
@@ -112,6 +154,6 @@ func parseUDP(srcIP, dstIP net.IP, data []byte) (*Frame, error) {
 		SrcPort: srcPort,
 		DstPort: dstPort,
 		Proto:   17,
-		Payload: data[8:],
+		Payload: data[8:length],
 	}, nil
 }

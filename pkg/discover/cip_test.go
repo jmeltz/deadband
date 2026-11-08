@@ -3,6 +3,8 @@ package discover
 import (
 	"encoding/binary"
 	"testing"
+
+	"github.com/jmeltz/deadband/pkg/inventory"
 )
 
 func TestBuildListIdentityRequest(t *testing.T) {
@@ -289,5 +291,79 @@ func TestBroadcastAddrForCIDR(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("broadcastAddrForCIDR(%q) = %q, want %q", tt.cidr, got, tt.want)
 		}
+	}
+}
+
+func TestCIPVendorName_ODVAIntralogisticsAndHVAC(t *testing.T) {
+	cases := []struct {
+		id   uint16
+		want string
+	}{
+		{40, "WAGO"},
+		{44, "Yaskawa"},
+		{75, "ABB"},
+		{97, "Danfoss"},
+		{108, "Beckhoff"},
+		{166, "Festo"},
+		{181, "Pilz"},
+		{287, "Leuze"},
+		{315, "SEW-EURODRIVE"},
+		{562, "Phoenix Contact"},
+		{678, "Cognex"},
+		{792, "Keyence"},
+		{808, "SICK"},
+		{913, "Moxa"},
+		{9999, "Vendor(9999)"},
+	}
+	for _, tc := range cases {
+		if got := CIPVendorName(tc.id); got != tc.want {
+			t.Errorf("CIPVendorName(%d) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}
+
+func TestMergeDevices_SubDevicesAndVendorUpgrade(t *testing.T) {
+	cipDevices := []inventory.Device{
+		// Chassis Slot 0 + Slot 3 on 10.0.0.10
+		{IP: "10.0.0.10", Vendor: "Rockwell Automation", Model: "1756-EN2T/D", Firmware: "11.002", Protocol: "cip", Slot: 0},
+		{IP: "10.0.0.10", Vendor: "Rockwell Automation", Model: "1756-L83E/B", Firmware: "33.011", Protocol: "cip", Slot: 3},
+		// Unmapped CIP vendor on 10.0.0.20 (should be upgraded by SICK probe)
+		{IP: "10.0.0.20", Vendor: "Vendor(9999)", Model: "CLV650-6120", Firmware: "5.022", Protocol: "cip"},
+	}
+	bacnetDevices := []inventory.Device{
+		// BACnet router + 2 downstream MS/TP controllers on 10.0.0.30
+		{IP: "10.0.0.30", Vendor: "Tridium", Model: "BACnet Device #100", Protocol: "bacnet", Extra: map[string]string{"device_instance": "100"}},
+		{IP: "10.0.0.30", Vendor: "Danfoss", Model: "AK-CC55", Firmware: "1.82", Protocol: "bacnet", Extra: map[string]string{"device_instance": "2030", "bacnet_snet": "2000", "bacnet_sadr": "1e"}},
+		{IP: "10.0.0.30", Vendor: "CAREL", Model: "MPXPRO", Firmware: "3.4", Protocol: "bacnet", Extra: map[string]string{"device_instance": "2031", "bacnet_snet": "2000", "bacnet_sadr": "1f"}},
+	}
+	sickDevices := []inventory.Device{
+		{IP: "10.0.0.20", Vendor: "SICK", Model: "CLV650-6120", Firmware: "5.22", Hostname: "aisle4-scanner", Protocol: "sick"},
+	}
+	ancillaryDevices := []inventory.Device{
+		{IP: "10.0.0.30", Vendor: "Tridium", Model: "Niagara JACE-8000", Firmware: "4.13.1", Hostname: "bms-router", Protocol: "http"},
+	}
+
+	merged := mergeDevices([][]inventory.Device{cipDevices, bacnetDevices, sickDevices, ancillaryDevices})
+	if len(merged) != 6 {
+		t.Fatalf("len(merged) = %d, want 6; got %+v", len(merged), merged)
+	}
+
+	// Verify 10.0.0.20 upgraded Vendor(9999) -> SICK and enriched Hostname
+	var scanner inventory.Device
+	var router inventory.Device
+	for _, d := range merged {
+		if d.IP == "10.0.0.20" {
+			scanner = d
+		}
+		if d.IP == "10.0.0.30" && d.Extra["bacnet_snet"] == "" {
+			router = d
+		}
+	}
+	if scanner.Vendor != "SICK" || scanner.Hostname != "aisle4-scanner" {
+		t.Errorf("scanner merge = %+v, want Vendor=SICK Hostname=aisle4-scanner", scanner)
+	}
+	// Verify BACnet Device #100 placeholder upgraded to Niagara JACE-8000 + Firmware 4.13.1
+	if router.Model != "Niagara JACE-8000" || router.Firmware != "4.13.1" || router.Extra["device_instance"] != "100" {
+		t.Errorf("router merge = %+v, want Model=Niagara JACE-8000 Firmware=4.13.1 device_instance=100", router)
 	}
 }

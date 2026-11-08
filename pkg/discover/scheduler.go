@@ -11,14 +11,15 @@ import (
 
 // Schedule defines a recurring discovery scan.
 type Schedule struct {
-	ID        string     `json:"id"`
-	CIDR      string     `json:"cidr"`
-	Mode      string     `json:"mode"`
-	Interval  string     `json:"interval"` // 1h, 6h, 24h, weekly
-	AutoCheck bool       `json:"auto_check"`
-	Enabled   bool       `json:"enabled"`
-	LastRun   *time.Time `json:"last_run,omitempty"`
-	NextRun   *time.Time `json:"next_run,omitempty"`
+	ID             string     `json:"id"`
+	CIDR           string     `json:"cidr"`
+	Mode           string     `json:"mode"`
+	Interval       string     `json:"interval"` // 1h, 6h, 24h, weekly
+	AutoCheck      bool       `json:"auto_check"`
+	IncludePosture bool       `json:"include_posture"`
+	Enabled        bool       `json:"enabled"`
+	LastRun        *time.Time `json:"last_run,omitempty"`
+	NextRun        *time.Time `json:"next_run,omitempty"`
 }
 
 // ScheduleStore persists schedules to disk.

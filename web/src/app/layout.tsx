@@ -16,12 +16,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full antialiased dark">
-      <body className="h-full flex bg-db-bg text-db-text">
+      <body className="h-full flex flex-col md:flex-row bg-db-bg text-db-text">
         <Providers>
           <Sidebar />
           <div className="flex-1 flex flex-col min-w-0">
             <Header />
-            <main className="flex-1 overflow-auto p-6">{children}</main>
+            <main className="flex-1 overflow-auto p-3 sm:p-6">{children}</main>
           </div>
         </Providers>
       </body>

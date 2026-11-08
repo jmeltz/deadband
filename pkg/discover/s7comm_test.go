@@ -1,8 +1,17 @@
 package discover
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildCOTPConnectRequest(t *testing.T) {
@@ -85,82 +94,24 @@ func TestBuildSZLReadRequest(t *testing.T) {
 		t.Errorf("TPKT version = %d, want %d", pkt[0], tpktVersion)
 	}
 
-	// S7 function at offset 17
-	if pkt[17] != s7FuncReadSZL {
-		t.Errorf("S7 function = 0x%02X, want 0x%02X", pkt[17], s7FuncReadSZL)
+	// UserData CPU-functions Read SZL parameters and typed ID/index payload.
+	if pkt[8] != 7 || !bytes.Equal(pkt[17:25], []byte{0, 1, 0x12, 4, 0x11, 0x44, 1, 0}) || !bytes.Equal(pkt[25:], []byte{0xff, 9, 0, 4, 0, 0x1c, 0, 0}) {
+		t.Fatalf("invalid SZL request %x", pkt)
 	}
 }
 
-// buildTestSZLResponse constructs a synthetic SZL 0x001C response
-// mimicking an S7-1200 CPU 1214C DC/DC/DC with firmware V4.5.2.
+// buildTestSZLResponse uses a recorded synthetic responder reply, independently of the
+// production builder. The component layout is checked against Siemens docs.
 func buildTestSZLResponse() []byte {
-	entryLen := 34 // SZL 0x001C entry size
-
-	// Build SZL entries
-	makeEntry := func(index uint16, value string) []byte {
-		entry := make([]byte, entryLen)
-		binary.BigEndian.PutUint16(entry[0:2], index)
-		copy(entry[2:], []byte(value))
-		return entry
+	b, err := os.ReadFile("testdata/saq-s7-001c.hex")
+	if err != nil {
+		panic(err)
 	}
-
-	entries := [][]byte{
-		makeEntry(1, "6ES7 214-1AG40-0XB0"),   // Order number
-		makeEntry(2, "CPU 1214C DC/DC/DC"),     // Module name
-		makeEntry(3, "S C-H5N44832201"),        // Serial
-		makeEntry(7, "V4.5.2"),                 // Firmware
+	data, err := hex.DecodeString(strings.TrimSpace(string(b)))
+	if err != nil {
+		panic(err)
 	}
-
-	// SZL header: SZL-ID (2) + count (2) + entry length (2)
-	szlHeader := make([]byte, 6)
-	binary.BigEndian.PutUint16(szlHeader[0:2], szlComponentID)
-	binary.BigEndian.PutUint16(szlHeader[2:4], uint16(len(entries)))
-	binary.BigEndian.PutUint16(szlHeader[4:6], uint16(entryLen))
-
-	var szlPayload []byte
-	szlPayload = append(szlPayload, szlHeader...)
-	for _, e := range entries {
-		szlPayload = append(szlPayload, e...)
-	}
-
-	// SZL data header: return code (1) + transport size (1) + data length (2)
-	szlData := make([]byte, 4)
-	szlData[0] = 0xFF // success
-	szlData[1] = 0x09 // transport size: octet string
-	binary.BigEndian.PutUint16(szlData[2:4], uint16(len(szlPayload)))
-	szlData = append(szlData, szlPayload...)
-
-	// S7 parameters (SZL read response)
-	s7Params := []byte{
-		s7FuncReadSZL,
-		s7SubReadSZL,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sequence + reserved
-	}
-
-	// S7 header (10 bytes) + error class/code (2 bytes)
-	s7Header := []byte{
-		s7ProtocolID,
-		s7MsgAckData,
-		0x00, 0x00, // Reserved
-		0x00, 0x02, // PDU reference
-		0x00, 0x00, // Parameter length (placeholder)
-		0x00, 0x00, // Data length (placeholder)
-		0x00, 0x00, // Error class + code
-	}
-	binary.BigEndian.PutUint16(s7Header[6:8], uint16(len(s7Params)))
-	binary.BigEndian.PutUint16(s7Header[8:10], uint16(len(szlData)))
-
-	// COTP Data
-	cotp := []byte{0x02, cotpDT, 0x80}
-
-	// Assemble: COTP + S7 header + S7 params + SZL data
-	var payload []byte
-	payload = append(payload, cotp...)
-	payload = append(payload, s7Header...)
-	payload = append(payload, s7Params...)
-	payload = append(payload, szlData...)
-
-	return buildTPKT(payload)
+	return data
 }
 
 func TestParseSZLResponse(t *testing.T) {
@@ -171,17 +122,53 @@ func TestParseSZLResponse(t *testing.T) {
 		t.Fatalf("ParseSZLResponse() error: %v", err)
 	}
 
-	if id.OrderNumber != "6ES7 214-1AG40-0XB0" {
-		t.Errorf("OrderNumber = %q, want %q", id.OrderNumber, "6ES7 214-1AG40-0XB0")
+	if id.OrderNumber != "" {
+		t.Errorf("component list must not fabricate order code: %q", id.OrderNumber)
 	}
-	if id.ModuleName != "CPU 1214C DC/DC/DC" {
-		t.Errorf("ModuleName = %q, want %q", id.ModuleName, "CPU 1214C DC/DC/DC")
+	if id.ModuleName != "CPU 1511-1 PN" {
+		t.Errorf("module type = %q", id.ModuleName)
 	}
-	if id.SerialNumber != "S C-H5N44832201" {
-		t.Errorf("SerialNumber = %q, want %q", id.SerialNumber, "S C-H5N44832201")
+	if id.SerialNumber != "S C-SAQ0000001" {
+		t.Errorf("serial = %q", id.SerialNumber)
 	}
-	if id.FirmwareVersion != "V4.5.2" {
-		t.Errorf("FirmwareVersion = %q, want %q", id.FirmwareVersion, "V4.5.2")
+	if id.FirmwareVersion != "" {
+		t.Errorf("module type must not be firmware: %q", id.FirmwareVersion)
+	}
+
+}
+
+func TestParseModuleSZLRecordedReply(t *testing.T) {
+	b, err := os.ReadFile("testdata/saq-s7-0011.hex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := hex.DecodeString(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := ParseSZLResponse(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.OrderNumber != "6ES7 511-1AK02-0AB0" || id.FirmwareVersion != "2.9.4" || id.SerialNumber != "" {
+		t.Fatalf("module identity %+v", id)
+	}
+	for _, mutation := range []func([]byte){
+		func(b []byte) { b[8] = s7MsgAckData }, // unsupported old synthetic framing
+		func(b []byte) { b[26] = 1 },           // more SZL data units follow
+		func(b []byte) { b[37] = 0xff },        // record length exceeds complete payload
+	} {
+		bad := append([]byte(nil), frame...)
+		mutation(bad)
+		if _, err := ParseSZLResponse(bad); err == nil {
+			t.Fatal("accepted malformed/fragmented response")
+		}
+	}
+}
+
+func TestTPKTRejectsUnderflow(t *testing.T) {
+	if _, err := ParseTPKT([]byte{3, 0, 0, 1}); err == nil {
+		t.Fatal("accepted negative payload length")
 	}
 }
 
@@ -283,5 +270,103 @@ func TestExtractNullTerminated(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("extractNullTerminated(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func buildTestSNMPResponse(sysDescr string) []byte {
+	oidTLV := append([]byte{0x06, byte(len(snmpSysDescrOID))}, snmpSysDescrOID...)
+	strTLV := wrapBERTLV(0x04, []byte(sysDescr))
+	vb := wrapBERTLV(0x30, append(oidTLV, strTLV...))
+	vbl := wrapBERTLV(0x30, vb)
+
+	pdu := append([]byte{0x02, 0x04, 0x44, 0x42, 0x00, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00}, vbl...)
+	respPDU := wrapBERTLV(0xA2, pdu)
+	msg := append([]byte{0x02, 0x01, 0x01}, wrapBERTLV(0x04, []byte("public"))...)
+	msg = append(msg, respPDU...)
+	return wrapBERTLV(0x30, msg)
+}
+
+func TestSNMPGetSysDescrAndParseSiemensS71500(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenPacket: %v", err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	go func() {
+		buf := make([]byte, 512)
+		_, addr, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		resp := buildTestSNMPResponse("Siemens, SIMATIC S7, CPU-1500, 6ES7 516-3FN02-0AB0, HW: 3, FW: V.2.9.4, S C-M4U82914")
+		_, _ = pc.WriteTo(resp, addr)
+	}()
+
+	gotDescr := SNMPGetSysDescr("127.0.0.1", port, time.Second)
+	id := ParseSiemensSysDescr(gotDescr)
+	if id == nil {
+		t.Fatalf("ParseSiemensSysDescr(%q) = nil", gotDescr)
+	}
+	dev := S7IdentityToDevice("10.10.2.15", id)
+	if dev.Vendor != "Siemens" || dev.Model != "SIMATIC S7-1500" || dev.OrderNum != "6ES7 516-3FN02-0AB0" || dev.Firmware != "2.9.4" {
+		t.Errorf("S7-1500 SNMP fallback device = %+v", dev)
+	}
+}
+
+func TestS7ProbeWebPortalURL_TIAPortal(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><title>SIMATIC S7 Web Server</title><body>CPU 1512SP F-1 PN | Order number: 6ES7 512-1SK01-0AB0 | Firmware version: V2.9.2</body></html>`))
+	}))
+	defer srv.Close()
+
+	client := newAncillaryHTTPClient(time.Second)
+	id := s7ProbeWebPortalURL(client, srv.URL+"/Portal/Portal.mwsl?PriNav=Ident")
+	if id == nil {
+		t.Fatal("expected S7Identity from TIA Portal web server, got nil")
+	}
+	dev := S7IdentityToDevice("10.10.2.16", id)
+	if dev.OrderNum != "6ES7 512-1SK01-0AB0" || dev.Firmware != "2.9.2" {
+		t.Errorf("S7 Portal fallback device = %+v", dev)
+	}
+}
+
+func TestS7ProbeTCP_Slot1AndCOTPFallback(t *testing.T) {
+	// Simulates a TIA Portal S7-1500F with PUT/GET disabled:
+	// Rejects Rack 0 Slot 2 with COTP DR, accepts Rack 0 Slot 1 with COTP CC, then closes on 0x32 Setup.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 256)
+			n, err := c.Read(buf)
+			if err == nil && n >= 18 {
+				// Check dst TSAP low byte: 0x02 -> DR, 0x01 -> CC
+				if bytes.Index(buf[:n], []byte{0xC2, 0x02, 0x01, 0x01}) >= 0 {
+					_, _ = c.Write(buildTPKT([]byte{0x05, cotpCC, 0x00, 0x01, 0x00, 0x02}))
+					// Read 0x32 setup and drop (PUT/GET disabled)
+					_, _ = c.Read(buf)
+				} else {
+					_, _ = c.Write(buildTPKT([]byte{0x05, cotpDR, 0x00, 0x01, 0x00, 0x02}))
+				}
+			}
+			c.Close()
+		}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	id, cotpConfirmed := s7ProbeTCP(host, port, 500*time.Millisecond)
+	if id != nil || !cotpConfirmed {
+		t.Fatalf("s7ProbeTCP = (id=%+v, cotpConfirmed=%v), want (nil, true)", id, cotpConfirmed)
 	}
 }

@@ -109,7 +109,7 @@ func matchDevice(dev inventory.Device, db *advisory.Database, opts FilterOpts) [
 		}
 
 		// Vendor match
-		if dev.Vendor != "" && !VendorMatches(dev.Vendor, adv.Vendor) {
+		if dev.Vendor != "" && !VendorMatchesForDevice(dev.Vendor, dev.Model, adv.Vendor, adv.Products) {
 			continue
 		}
 

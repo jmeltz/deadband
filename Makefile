@@ -1,6 +1,6 @@
 .PHONY: all deadband release deadband-web deadband-web-windows web test vet clean
 
-VERSION ?= 0.7.0
+VERSION ?= 0.8.0
 LDFLAGS := -s -w -X github.com/jmeltz/deadband/pkg/cli.Version=$(VERSION)
 BUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
@@ -28,7 +28,7 @@ web:
 deadband-web: web
 	mkdir -p pkg/server/static
 	cp -r web/out/* pkg/server/static/
-	CGO_ENABLED=0 go build -tags embed_web -o $(BINDIR)/deadband ./cmd/deadband/
+	$(BUILD) -tags embed_web -o $(BINDIR)/deadband ./cmd/deadband/
 	rm -rf pkg/server/static
 
 # Cross-compiled Windows builds with the embedded web UI. Produces both
@@ -36,8 +36,8 @@ deadband-web: web
 deadband-web-windows: web
 	mkdir -p pkg/server/static
 	cp -r web/out/* pkg/server/static/
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags embed_web -o $(BINDIR)/deadband-windows-amd64.exe ./cmd/deadband/
-	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -tags embed_web -o $(BINDIR)/deadband-windows-arm64.exe ./cmd/deadband/
+	GOOS=windows GOARCH=amd64 $(BUILD) -tags embed_web -o $(BINDIR)/deadband-windows-amd64.exe ./cmd/deadband/
+	GOOS=windows GOARCH=arm64 $(BUILD) -tags embed_web -o $(BINDIR)/deadband-windows-arm64.exe ./cmd/deadband/
 	rm -rf pkg/server/static
 
 test:

@@ -21,6 +21,26 @@ type OPCUAIdentity struct {
 	ServerURIs      []string
 }
 
+// ParseOPCUAResponseFrame parses a passive OPC UA TCP response frame (MSG GetEndpointsResponse).
+func ParseOPCUAResponseFrame(ip string, data []byte) *inventory.Device {
+	if len(data) < 25 || string(data[:3]) != "MSG" {
+		return nil
+	}
+	msgSize := binary.LittleEndian.Uint32(data[4:8])
+	if msgSize < 25 || int(msgSize) > len(data) {
+		return nil
+	}
+	id, err := parseGetEndpointsResponse(data[24:msgSize])
+	if err != nil || id == nil {
+		return nil
+	}
+	dev := opcuaIdentityToDevice(ip, id)
+	if dev.Model == "" {
+		return nil
+	}
+	return &dev
+}
+
 // opcuaIdentityToDevice converts an OPCUAIdentity to an inventory Device.
 func opcuaIdentityToDevice(ip string, id *OPCUAIdentity) inventory.Device {
 	vendor := opcuaVendorFromURI(id.ProductURI)
@@ -54,18 +74,50 @@ func opcuaVendorFromURI(uri string) string {
 		return "Swisslog"
 	case strings.Contains(u, "dematic"):
 		return "Dematic"
+	case strings.Contains(u, "vanderlande"):
+		return "Vanderlande"
+	case strings.Contains(u, "tgw"):
+		return "TGW"
+	case strings.Contains(u, "schaefer") || strings.Contains(u, "wamas"):
+		return "SSI Schaefer"
+	case strings.Contains(u, "autostore"):
+		return "AutoStore"
+	case strings.Contains(u, "interroll"):
+		return "Interroll"
 	case strings.Contains(u, "vaisala") || strings.Contains(u, "viewlinc"):
 		return "Vaisala"
 	case strings.Contains(u, "sick") || strings.Contains(u, "sopas"):
 		return "SICK"
 	case strings.Contains(u, "cognex"):
 		return "Cognex"
+	case strings.Contains(u, "pilz"):
+		return "Pilz"
+	case strings.Contains(u, "festo"):
+		return "Festo"
+	case strings.Contains(u, "turck"):
+		return "TURCK"
+	case strings.Contains(u, "lenze"):
+		return "Lenze"
+	case strings.Contains(u, "weidmueller") || strings.Contains(u, "weidmuller") || strings.Contains(u, "weidmüller"):
+		return "Weidmüller"
 	case strings.Contains(u, "danfoss"):
 		return "Danfoss"
 	case strings.Contains(u, "carel"):
 		return "CAREL"
 	case strings.Contains(u, "copeland") || strings.Contains(u, "dixell"):
 		return "Copeland"
+	case strings.Contains(u, "trane"):
+		return "Trane"
+	case strings.Contains(u, "johnsoncontrols") || strings.Contains(u, "metasys"):
+		return "Johnson Controls"
+	case strings.Contains(u, "carrier") || strings.Contains(u, "webctrl") || strings.Contains(u, "automatedlogic"):
+		return "Carrier"
+	case strings.Contains(u, "tridium") || strings.Contains(u, "niagara"):
+		return "Tridium"
+	case strings.Contains(u, "loytec"):
+		return "LOYTEC"
+	case strings.Contains(u, "distech"):
+		return "Distech Controls"
 	case strings.Contains(u, "sew-eurodrive"):
 		return "SEW-EURODRIVE"
 	case strings.Contains(u, "siemens"):

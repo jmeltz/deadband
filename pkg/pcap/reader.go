@@ -38,6 +38,7 @@ type Reader struct {
 	r       io.Reader
 	header  FileHeader
 	swapped bool
+	closer  io.Closer
 }
 
 // Open opens a pcap file and validates the global header.
@@ -46,7 +47,20 @@ func Open(path string) (*Reader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening pcap: %w", err)
 	}
-	return NewReader(f)
+	pr, err := NewReader(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	pr.closer = f
+	return pr, nil
+}
+
+func (pr *Reader) Close() error {
+	if pr.closer != nil {
+		return pr.closer.Close()
+	}
+	return nil
 }
 
 // NewReader creates a Reader from any io.Reader.

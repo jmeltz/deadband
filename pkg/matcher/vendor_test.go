@@ -100,7 +100,14 @@ func TestNormalizeVendorSubstringMatching(t *testing.T) {
 		{"CKS, a subsidiary of Johnson Controls Inc.", "Johnson Controls"},
 		{"Sensormatic Electronics, LLC, a subsidiary of Johnson Controls Inc.", "Johnson Controls"},
 		{"Sensormatic Electronics, a subsidiary of Johnson Controls, Inc.", "Johnson Controls"},
-		{"Automated Logic Corporation (ALC)", "Johnson Controls"},
+		{"Automated Logic Corporation (ALC)", "Carrier"},
+		{"LenelS2", "Carrier"},
+		{"Tridium Inc.", "Tridium"},
+		{"Delta Controls Inc.", "Delta Controls"},
+		{"Delta Electronics, Inc.", "Delta Electronics"},
+		{"Fr. Sauter AG", "SAUTER"},
+		{"Kieback & Peter GmbH & Co. KG", "Kieback & Peter"},
+		{"Weidmüller Interface GmbH", "Weidmüller"},
 
 		// Compound Phoenix Contact strings
 		{"PHOENIX CONTACT, Innominate Security Technologies", "Phoenix Contact"},
@@ -186,5 +193,24 @@ func TestVendorMatches(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("VendorMatches(%q, %q) = %v, want %v", tt.inv, tt.adv, got, tt.want)
 		}
+	}
+}
+
+func TestVendorMatchesForDevice(t *testing.T) {
+	// B&R device matches ABB advisory when advisory covers B&R product family
+	if !VendorMatchesForDevice("B&R", "X20CP1586", "ABB", []string{"Automation Runtime", "System Diagnostics Manager"}) {
+		t.Error("expected B&R X20CP1586 to match ABB Automation Runtime advisory")
+	}
+	// B&R device must NOT match unrelated ABB AC500 advisory
+	if VendorMatchesForDevice("B&R", "X20CP1586", "ABB", []string{"AC500"}) {
+		t.Error("expected B&R X20CP1586 not to match ABB AC500 advisory")
+	}
+	// OEM-branded Honeywell Niagara JACE matches upstream Tridium Niagara Framework advisory
+	if !VendorMatchesForDevice("Honeywell", "Niagara WEBs-N4", "Tridium", []string{"Niagara Framework"}) {
+		t.Error("expected Honeywell Niagara WEBs-N4 to match Tridium Niagara Framework advisory")
+	}
+	// Carrier / Automated Logic unification
+	if !VendorMatchesForDevice("Automated Logic", "WebCTRL", "Carrier", []string{"Carrier i-Vu", "Automated Logic WebCTRL"}) {
+		t.Error("expected Automated Logic WebCTRL to match Carrier advisory")
 	}
 }

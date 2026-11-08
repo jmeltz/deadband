@@ -10,9 +10,16 @@ type csafDoc struct {
 
 type csafDocument struct {
 	Title      string          `json:"title"`
+	Publisher  csafPublisher   `json:"publisher"`
 	Tracking   csafTracking    `json:"tracking"`
 	References []csafReference `json:"references"`
 	Notes      []csafNote      `json:"notes,omitempty"`
+}
+
+type csafPublisher struct {
+	Name      string `json:"name"`
+	Category  string `json:"category,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type csafNote struct {
@@ -33,7 +40,8 @@ type csafReference struct {
 }
 
 type csafProductTree struct {
-	Branches []csafBranch `json:"branches"`
+	Branches         []csafBranch  `json:"branches"`
+	FullProductNames []csafProduct `json:"full_product_names,omitempty"`
 }
 
 type csafBranch struct {
@@ -54,12 +62,14 @@ type csafProductHelpers struct {
 }
 
 type csafVulnerability struct {
-	CVE           string              `json:"cve"`
-	Scores        []csafScore         `json:"scores"`
-	ProductStatus *csafProductStatus  `json:"product_status,omitempty"`
-	CWE           *csafCWE            `json:"cwe,omitempty"`
-	Notes         []csafNote          `json:"notes,omitempty"`
-	Remediations  []csafRemediation   `json:"remediations,omitempty"`
+	Title         string             `json:"title,omitempty"`
+	CVE           string             `json:"cve"`
+	Scores        []csafScore        `json:"scores"`
+	ProductStatus *csafProductStatus `json:"product_status,omitempty"`
+	CWE           *csafCWE           `json:"cwe,omitempty"`
+	Notes         []csafNote         `json:"notes,omitempty"`
+	Remediations  []csafRemediation  `json:"remediations,omitempty"`
+	References    []csafReference    `json:"references,omitempty"`
 }
 
 type csafCWE struct {
@@ -95,12 +105,60 @@ type productInfo struct {
 
 func extractFromTree(branches []csafBranch) (vendor string, products []string, versions []string, productIDs map[string]productInfo) {
 	productIDs = make(map[string]productInfo)
-	walkBranches(branches, "", "", productIDs, &vendor, &products, &versions)
+	walkBranches(branches, "", "", nil, productIDs, &vendor, &products, &versions)
 	return
 }
 
-func walkBranches(branches []csafBranch, currentVendor, currentProduct string, productIDs map[string]productInfo, vendor *string, products *[]string, versions *[]string) {
+func extractFromDoc(doc *csafDoc) (vendor string, products []string, versions []string) {
+	knownAffected := make(map[string]bool)
+	excluded := make(map[string]bool)
+	for _, vuln := range doc.Vulnerabilities {
+		if vuln.ProductStatus == nil {
+			continue
+		}
+		for _, id := range vuln.ProductStatus.KnownAffected {
+			knownAffected[id] = true
+		}
+		for _, id := range vuln.ProductStatus.Fixed {
+			excluded[id] = true
+		}
+		for _, id := range vuln.ProductStatus.KnownNotAffected {
+			excluded[id] = true
+		}
+	}
+	for id := range knownAffected {
+		delete(excluded, id)
+	}
+
+	productIDs := make(map[string]productInfo)
+	walkBranches(doc.ProductTree.Branches, "", "", excluded, productIDs, &vendor, &products, &versions)
+
+	if len(products) == 0 {
+		for _, fp := range doc.ProductTree.FullProductNames {
+			if excluded[fp.ProductID] {
+				continue
+			}
+			if fp.Name != "" {
+				products = append(products, fp.Name)
+			}
+		}
+	}
+
+	if vendor == "" && doc.Document.Publisher.Name != "" {
+		pub := doc.Document.Publisher.Name
+		if doc.Document.Publisher.Category != "coordinator" {
+			vendor = pub
+		}
+	}
+	return vendor, products, versions
+}
+
+func walkBranches(branches []csafBranch, currentVendor, currentProduct string, excludedIDs map[string]bool, productIDs map[string]productInfo, vendor *string, products *[]string, versions *[]string) {
 	for _, b := range branches {
+		if b.Product != nil && b.Product.ProductID != "" && excludedIDs[b.Product.ProductID] {
+			continue
+		}
+
 		v := currentVendor
 		p := currentProduct
 
@@ -113,6 +171,10 @@ func walkBranches(branches []csafBranch, currentVendor, currentProduct string, p
 		case "product_name":
 			p = b.Name
 			*products = append(*products, b.Name)
+		case "product_family":
+			if p == "" {
+				p = b.Name
+			}
 		case "product_version", "product_version_range":
 			*versions = append(*versions, b.Name)
 		}
@@ -125,7 +187,7 @@ func walkBranches(branches []csafBranch, currentVendor, currentProduct string, p
 		}
 
 		if len(b.Branches) > 0 {
-			walkBranches(b.Branches, v, p, productIDs, vendor, products, versions)
+			walkBranches(b.Branches, v, p, excludedIDs, productIDs, vendor, products, versions)
 		}
 	}
 }

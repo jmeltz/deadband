@@ -289,6 +289,54 @@ var controlMappings = map[string][]RecommendedControl{
 			Priority:       "short_term",
 		},
 	},
+
+	"ads_it_coexposure": {
+		{
+			Framework:      "IEC 62443",
+			ControlID:      "62443-3-3 SR 7.7",
+			ControlName:    "Least Functionality",
+			Recommendation: "Disable Windows RDP (3389) and SMB (445) on Beckhoff TwinCAT IPCs; enable Secure ADS (TLS/8016) and restrict ADS (48898) to engineered AMS routes",
+			Priority:       "immediate",
+		},
+		{
+			Framework:      "NIST CSF 2.0",
+			ControlID:      "PR.AA-06",
+			ControlName:    "Remote Access Management",
+			Recommendation: "Block direct RDP/SMB to TwinCAT controllers at the cell firewall; route engineering access via an authenticated OT jump host",
+			Priority:       "immediate",
+		},
+		{
+			Framework:      "NERC CIP",
+			ControlID:      "CIP-007-7 R1",
+			ControlName:    "Ports and Services",
+			Recommendation: "Disable unneeded Windows remote management and file-sharing ports on PC-based PLC controllers",
+			Priority:       "immediate",
+		},
+	},
+
+	"cleartext_ot_web": {
+		{
+			Framework:      "IEC 62443",
+			ControlID:      "62443-3-3 SR 4.1",
+			ControlName:    "Information Confidentiality",
+			Recommendation: "Enable HTTPS/TLS (443/8443) and disable cleartext HTTP (80/8080) on BMS, cold-chain refrigeration, and WCS web interfaces",
+			Priority:       "short_term",
+		},
+		{
+			Framework:      "NIST CSF 2.0",
+			ControlID:      "PR.DS-02",
+			ControlName:    "Data-in-Transit Protection",
+			Recommendation: "Enforce TLS encryption for supervisory web portals or isolate legacy HTTP-only controllers behind an encrypted management proxy",
+			Priority:       "short_term",
+		},
+		{
+			Framework:      "NERC CIP",
+			ControlID:      "CIP-005-7 R2.2",
+			ControlName:    "Encrypted Interactive Access",
+			Recommendation: "Require encryption for all interactive web management sessions to OT controllers",
+			Priority:       "short_term",
+		},
+	},
 }
 
 // ControlsForFinding returns the recommended controls for a given finding type.

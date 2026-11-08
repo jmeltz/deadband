@@ -30,6 +30,18 @@ func main() {
 	// Handle subcommands before flag.Parse()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "query":
+			if err := runQuery(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "[deadband]", err)
+				os.Exit(2)
+			}
+			return
+		case "enrich":
+			if err := runQuery(append([]string{"run"}, os.Args[2:]...)); err != nil {
+				fmt.Fprintln(os.Stderr, "[deadband]", err)
+				os.Exit(2)
+			}
+			return
 		case "serve":
 			serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
 			addr := serveFlags.String("addr", ":8484", "Listen address (e.g. :8484)")
@@ -54,35 +66,35 @@ func main() {
 	}
 
 	var (
-		showVersion   bool
-		inventoryPath string
-		comparePath   string
-		inputFormat   string
-		dbPath        string
-		outputPath    string
-		outFormat     string
-		minConfidence string
-		minCVSS       float64
-		vendorFilter  string
-		dryRun        bool
-		update        bool
-		stats         bool
-		since         string
-		source        string
+		showVersion     bool
+		inventoryPath   string
+		comparePath     string
+		inputFormat     string
+		dbPath          string
+		outputPath      string
+		outFormat       string
+		minConfidence   string
+		minCVSS         float64
+		vendorFilter    string
+		dryRun          bool
+		update          bool
+		stats           bool
+		since           string
+		source          string
 		cidr            string
 		scanMode        string
 		legacyHTTP      bool
 		scanTimeout     time.Duration
 		httpTimeout     time.Duration
 		concurrency     int
-		prioritize       bool
-		skipEnrichment   bool
-		complianceFlag   string
-		saveBaseline     bool
-		compareBaseline  bool
-		baselinePath     string
-		autoSaveAssets   bool
-		assetStorePath   string
+		prioritize      bool
+		skipEnrichment  bool
+		complianceFlag  string
+		saveBaseline    bool
+		compareBaseline bool
+		baselinePath    string
+		autoSaveAssets  bool
+		assetStorePath  string
 		serve           bool
 		serveAddr       string
 		siteName        string
@@ -101,14 +113,14 @@ func main() {
 	flag.Float64Var(&minCVSS, "min-cvss", 0.0, "Minimum CVSS v3 score filter")
 	flag.StringVar(&vendorFilter, "vendor", "", "Filter to a specific vendor")
 	flag.BoolVar(&dryRun, "dry-run", false, "Parse and report counts only, emit no results")
-	flag.BoolVar(&update, "update", false, "Fetch/refresh advisory database from CISA CSAF repo")
+	flag.BoolVar(&update, "update", false, "Fetch/refresh advisory database (CISA CSAF, OASIS ROLIE & targeted NVD)")
 	flag.BoolVar(&stats, "stats", false, "Show advisory DB metadata")
 	flag.StringVar(&since, "since", "", "Only fetch advisories published after this date (YYYY-MM-DD)")
 	flag.StringVar(&source, "source", "", "Update source: empty=snapshot+fallback, 'github'=per-file fetch, http(s)://...=specific snapshot URL, /local/path=air-gapped CSAF mirror")
 
 	// Discovery flags
 	flag.StringVar(&cidr, "cidr", "", "Discover devices on network (e.g. 10.0.1.0/24)")
-	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, bacnet, opcua, ads, sick, ancillary, melsec, fins, srtp, haas, fanuc, mazak, http")
+	flag.StringVar(&scanMode, "mode", "auto", "Discovery mode: auto, cip, s7, modbus, bacnet, opcua, ads, sick, fox, ancillary, melsec, fins, srtp, haas, fanuc, mazak, http")
 	flag.BoolVar(&legacyHTTP, "legacy-http", false, "Use HTTP scraping (alias for --mode http)")
 	flag.DurationVar(&scanTimeout, "timeout", 2*time.Second, "TCP/UDP scan timeout")
 	flag.DurationVar(&httpTimeout, "http-timeout", 5*time.Second, "HTTP scrape timeout")
@@ -142,9 +154,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "OT asset inventory & vulnerability scanner\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <file>   Check devices against advisory database\n")
-		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices across 11 OT/CNC protocols and check\n")
+		fmt.Fprintf(os.Stderr, "  deadband --cidr <range>       Discover devices across 15+ OT, ASRS, BMS & CNC protocols and check\n")
 		fmt.Fprintf(os.Stderr, "  deadband --inventory <base> --compare <new>  Diff two inventory snapshots\n")
 		fmt.Fprintf(os.Stderr, "  deadband pcap <file>          Extract devices from pcap capture (passive)\n")
+		fmt.Fprintf(os.Stderr, "  deadband query plan|run       Plan or execute bounded asset enrichment\n")
+		fmt.Fprintf(os.Stderr, "  deadband enrich --plan file   Execute a reviewed query plan\n")
 		fmt.Fprintf(os.Stderr, "  deadband --serve              Start the web UI and API server\n")
 		fmt.Fprintf(os.Stderr, "  deadband --update             Fetch/refresh advisory database\n")
 		fmt.Fprintf(os.Stderr, "  deadband --stats              Show advisory DB metadata\n")
@@ -224,6 +238,10 @@ func runDiscover(cidr string, scanMode string, scanTimeout, httpTimeout time.Dur
 	}
 
 	mode := discover.DiscoveryMode(scanMode)
+	if err := discover.ValidateMode(mode); err != nil {
+		fmt.Fprintln(os.Stderr, "[deadband]", err)
+		os.Exit(2)
+	}
 
 	if dryRun {
 		fmt.Printf("[deadband] Dry run: would scan %d hosts (mode: %s)\n", len(ips), mode)

@@ -218,7 +218,7 @@ export function InventoryTab({ onDiscover }: { onDiscover?: () => void }) {
             value={vulnFilter}
             onChange={setVulnFilter}
             placeholder="Vuln Status"
-            options={["VULNERABLE", "POTENTIAL", "OK", "UNCHECKED"]}
+            options={["VULNERABLE", "POTENTIAL", "OK", "NO_MATCH", "UNKNOWN", "UNCHECKED"]}
           />
           {(vendorFilter ||
             siteFilter ||

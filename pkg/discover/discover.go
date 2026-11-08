@@ -23,6 +23,7 @@ const (
 	ModeOPCUA      DiscoveryMode = "opcua"
 	ModeADS        DiscoveryMode = "ads"
 	ModeSICK       DiscoveryMode = "sick"
+	ModeFox        DiscoveryMode = "fox"
 	ModeAncillary  DiscoveryMode = "ancillary"
 	ModeHaas       DiscoveryMode = "haas"
 	ModeFanuc      DiscoveryMode = "fanuc"
@@ -40,9 +41,24 @@ type Opts struct {
 	Progress    func(msg string)
 }
 
+// ValidateMode rejects a misspelled or unsupported mode before any network I/O.
+func ValidateMode(mode DiscoveryMode) error {
+	switch mode {
+	case "", ModeAuto, ModeCIP, ModeS7, ModeModbusTCP, ModeMELSEC, ModeBACnet,
+		ModeFINS, ModeSRTP, ModeOPCUA, ModeADS, ModeSICK, ModeFox,
+		ModeAncillary, ModeHaas, ModeFanuc, ModeMazak, ModeLegacyHTTP:
+		return nil
+	default:
+		return fmt.Errorf("unsupported discovery mode %q", mode)
+	}
+}
+
 // Run performs device discovery on a CIDR range and returns inventory devices.
 // In Auto mode (default), probes both CIP and S7 protocols concurrently.
 func Run(opts Opts) ([]inventory.Device, error) {
+	if err := ValidateMode(opts.Mode); err != nil {
+		return nil, err
+	}
 	if opts.Mode == "" {
 		opts.Mode = ModeAuto
 	}
@@ -73,6 +89,8 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runADS(opts, ips)
 	case ModeSICK:
 		return runSICK(opts, ips)
+	case ModeFox:
+		return runFox(opts, ips)
 	case ModeAncillary:
 		return runAncillary(opts, ips)
 	case ModeHaas:
@@ -83,9 +101,10 @@ func Run(opts Opts) ([]inventory.Device, error) {
 		return runMazak(opts, ips)
 	case ModeLegacyHTTP:
 		return runHTTP(opts, ips)
-	default:
+	case ModeAuto:
 		return runAuto(opts, ips)
 	}
+	return nil, fmt.Errorf("unsupported discovery mode %q", opts.Mode)
 }
 
 func runCIP(opts Opts, ips []string) ([]inventory.Device, error) {
@@ -276,6 +295,20 @@ func runSICK(opts Opts, ips []string) ([]inventory.Device, error) {
 	return devices, nil
 }
 
+func runFox(opts Opts, ips []string) ([]inventory.Device, error) {
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Tridium Niagara Fox/FoxS discovery on %d hosts...", len(ips)))
+	}
+
+	devices := discoverFox(ips, opts.Timeout, opts.Concurrency, opts.Progress)
+
+	if opts.Progress != nil {
+		opts.Progress(fmt.Sprintf("Tridium Niagara Fox/FoxS discovery found %d devices", len(devices)))
+	}
+
+	return devices, nil
+}
+
 func runAncillary(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
 		opts.Progress(fmt.Sprintf("Ancillary Cold-Chain / WCS / HVAC HTTP+TLS discovery on %d hosts...", len(ips)))
@@ -292,7 +325,7 @@ func runAncillary(opts Opts, ips []string) ([]inventory.Device, error) {
 
 func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	if opts.Progress != nil {
-		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + BACnet + OPC UA + ADS + SICK + MELSEC + FINS + SRTP + Haas + Fanuc + Mazak + Ancillary) on %d hosts...", len(ips)))
+		opts.Progress(fmt.Sprintf("Auto discovery (CIP + S7 + Modbus + BACnet + Fox + OPC UA + ADS + SICK + MELSEC + FINS + SRTP + Haas + Fanuc + Mazak + Ancillary) on %d hosts...", len(ips)))
 	}
 
 	type result struct {
@@ -304,6 +337,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	s7Ch := make(chan result, 1)
 	modbusCh := make(chan result, 1)
 	bacnetCh := make(chan result, 1)
+	foxCh := make(chan result, 1)
 	melsecCh := make(chan result, 1)
 	finsCh := make(chan result, 1)
 	srtpCh := make(chan result, 1)
@@ -330,6 +364,10 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	go func() {
 		d, e := runBACnet(opts, ips)
 		bacnetCh <- result{d, e}
+	}()
+	go func() {
+		d, e := runFox(opts, ips)
+		foxCh <- result{d, e}
 	}()
 	go func() {
 		d, e := runMELSEC(opts, ips)
@@ -376,6 +414,7 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	s7Result := <-s7Ch
 	modbusResult := <-modbusCh
 	bacnetResult := <-bacnetCh
+	foxResult := <-foxCh
 	melsecResult := <-melsecCh
 	finsResult := <-finsCh
 	srtpResult := <-srtpCh
@@ -387,13 +426,14 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 	fanucResult := <-fanucCh
 	mazakResult := <-mazakCh
 
-	// Merge results, deduplicate by IP (prefer structured OT identities first, then Ancillary HTTP+TLS)
-	seen := make(map[string]inventory.Device)
-	mergeList := [][]inventory.Device{
+	// Merge results: preserve multi-slot chassis modules and routed BACnet sub-devices,
+	// while upgrading placeholder vendors/models on primary host entries.
+	devices := mergeDevices([][]inventory.Device{
 		cipResult.devices,
 		s7Result.devices,
 		modbusResult.devices,
 		bacnetResult.devices,
+		foxResult.devices,
 		opcuaResult.devices,
 		adsResult.devices,
 		sickResult.devices,
@@ -404,38 +444,133 @@ func runAuto(opts Opts, ips []string) ([]inventory.Device, error) {
 		fanucResult.devices,
 		mazakResult.devices,
 		ancillaryResult.devices,
-	}
-	for _, list := range mergeList {
-		for _, d := range list {
-			if existing, ok := seen[d.IP]; !ok || existing.Model == "" {
-				seen[d.IP] = d
-			} else {
-				if existing.Firmware == "" && d.Firmware != "" {
-					existing.Firmware = d.Firmware
-				}
-				if existing.Hostname == "" && d.Hostname != "" {
-					existing.Hostname = d.Hostname
-				}
-				seen[d.IP] = existing
-			}
-		}
-	}
-
-	devices := make([]inventory.Device, 0, len(seen))
-	for _, d := range seen {
-		devices = append(devices, d)
-	}
+	})
 
 	if opts.Progress != nil {
 		opts.Progress(fmt.Sprintf("Auto discovery found %d total devices", len(devices)))
 	}
 
-	// Return first non-nil error if all failed
-	if cipResult.err != nil && s7Result.err != nil && modbusResult.err != nil && melsecResult.err != nil && finsResult.err != nil && srtpResult.err != nil && opcuaResult.err != nil && haasResult.err != nil && fanucResult.err != nil && mazakResult.err != nil {
+	// Return first non-nil error only if every protocol probe failed
+	allResults := []result{
+		cipResult, s7Result, modbusResult, bacnetResult, foxResult,
+		melsecResult, finsResult, srtpResult, opcuaResult,
+		adsResult, sickResult, ancillaryResult, haasResult,
+		fanucResult, mazakResult,
+	}
+	allFailed := true
+	for _, r := range allResults {
+		if r.err == nil {
+			allFailed = false
+			break
+		}
+	}
+	if allFailed {
 		return devices, cipResult.err
 	}
 
 	return devices, nil
+}
+
+func isPlaceholderVendor(v string) bool {
+	v = strings.TrimSpace(v)
+	return v == "" ||
+		strings.EqualFold(v, "Unknown") ||
+		strings.HasPrefix(v, "Vendor(") ||
+		strings.HasPrefix(v, "BACnet Vendor ")
+}
+
+func isPlaceholderModel(m string) bool {
+	m = strings.TrimSpace(m)
+	return m == "" ||
+		strings.HasPrefix(m, "BACnet Device #") ||
+		m == "OPC UA Server" ||
+		m == "TwinCAT ADS Router" ||
+		m == "SIMATIC S7"
+}
+
+func deviceMergeKey(d inventory.Device, seen map[string]inventory.Device) string {
+	if d.Slot > 0 || (d.Extra != nil && d.Extra["component"] == "chassis_slot") {
+		return fmt.Sprintf("%s|slot:%d", d.IP, d.Slot)
+	}
+	if d.Protocol == "bacnet" && d.Extra != nil {
+		if snet := d.Extra["bacnet_snet"]; snet != "" {
+			return fmt.Sprintf("%s|bacnet:%s:%s:%s", d.IP, snet, d.Extra["bacnet_sadr"], d.Extra["device_instance"])
+		}
+		if inst := d.Extra["device_instance"]; inst != "" {
+			if existing, ok := seen[d.IP]; ok && existing.Protocol == "bacnet" && existing.Extra != nil {
+				if prevInst := existing.Extra["device_instance"]; prevInst != "" && prevInst != inst {
+					return fmt.Sprintf("%s|bacnet:%s", d.IP, inst)
+				}
+			}
+		}
+	}
+	return d.IP
+}
+
+func mergeDevices(lists [][]inventory.Device) []inventory.Device {
+	seen := make(map[string]inventory.Device)
+	var order []string
+
+	for _, list := range lists {
+		for _, d := range list {
+			key := deviceMergeKey(d, seen)
+			existing, ok := seen[key]
+			if !ok {
+				if d.Extra != nil {
+					copied := make(map[string]string, len(d.Extra))
+					for k, v := range d.Extra {
+						copied[k] = v
+					}
+					d.Extra = copied
+				}
+				seen[key] = d
+				order = append(order, key)
+				continue
+			}
+
+			if isPlaceholderVendor(existing.Vendor) && !isPlaceholderVendor(d.Vendor) {
+				existing.Vendor = d.Vendor
+				if d.Model != "" && (isPlaceholderModel(existing.Model) || existing.Protocol != d.Protocol) {
+					// Keep concrete hardware model if existing already has one, unless existing is a generic placeholder
+					if isPlaceholderModel(existing.Model) {
+						existing.Model = d.Model
+					}
+				}
+			}
+			if isPlaceholderModel(existing.Model) && d.Model != "" && !isPlaceholderModel(d.Model) {
+				existing.Model = d.Model
+			}
+			if existing.Firmware == "" && d.Firmware != "" {
+				existing.Firmware = d.Firmware
+			}
+			if existing.Hostname == "" && d.Hostname != "" {
+				existing.Hostname = d.Hostname
+			}
+			if existing.Serial == "" && d.Serial != "" {
+				existing.Serial = d.Serial
+			}
+			if existing.MAC == "" && d.MAC != "" {
+				existing.MAC = d.MAC
+			}
+			if len(d.Extra) > 0 {
+				if existing.Extra == nil {
+					existing.Extra = make(map[string]string, len(d.Extra))
+				}
+				for k, v := range d.Extra {
+					if v != "" && existing.Extra[k] == "" {
+						existing.Extra[k] = v
+					}
+				}
+			}
+			seen[key] = existing
+		}
+	}
+
+	devices := make([]inventory.Device, 0, len(order))
+	for _, key := range order {
+		devices = append(devices, seen[key])
+	}
+	return devices
 }
 
 func runHTTP(opts Opts, ips []string) ([]inventory.Device, error) {

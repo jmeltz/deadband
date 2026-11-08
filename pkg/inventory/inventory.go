@@ -122,16 +122,17 @@ func parseCSV(r io.Reader) ([]Device, error) {
 				dev.MAC = strings.TrimSpace(record[i])
 			}
 		} else {
-			// Generic CSV: IP, Vendor, Model, Firmware
-			if len(record) >= 4 {
-				dev.IP = strings.TrimSpace(record[0])
-				dev.Vendor = strings.TrimSpace(record[1])
-				dev.Model = strings.TrimSpace(record[2])
-				dev.Firmware = strings.TrimSpace(record[3])
+			// Preserve incomplete identity records as enrichment candidates.
+			get := func(i int) string {
+				if i < len(record) {
+					return strings.TrimSpace(record[i])
+				}
+				return ""
 			}
+			dev.IP, dev.Vendor, dev.Model, dev.Firmware = get(0), get(1), get(2), get(3)
 		}
 
-		if dev.IP != "" && dev.Model != "" {
+		if dev.IP != "" {
 			devices = append(devices, dev)
 		}
 	}
@@ -186,24 +187,14 @@ func parseJSON(r io.Reader) ([]Device, error) {
 	}
 
 	// Generic JSON array: [{ip, vendor, model, firmware}]
-	var generic []struct {
-		IP       string `json:"ip"`
-		Vendor   string `json:"vendor"`
-		Model    string `json:"model"`
-		Firmware string `json:"firmware"`
-	}
+	var generic []Device
 	if err := json.Unmarshal(data, &generic); err != nil {
 		return nil, fmt.Errorf("parsing JSON inventory: %w", err)
 	}
 	devices := make([]Device, 0, len(generic))
 	for _, g := range generic {
-		if g.IP != "" && g.Model != "" {
-			devices = append(devices, Device{
-				IP:       g.IP,
-				Vendor:   g.Vendor,
-				Model:    g.Model,
-				Firmware: g.Firmware,
-			})
+		if g.IP != "" {
+			devices = append(devices, g)
 		}
 	}
 	return devices, nil

@@ -80,13 +80,14 @@ export function DiscoverTab({ onImported }: { onImported?: () => void }) {
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed)) {
           const devs = parsed
-            .map((d: Record<string, string>) => ({
+            .map((d: Device & {scanned_ip?: string; device_name?: string; product_revision?: string}) => ({
+              ...d,
               ip: d.ip || d.scanned_ip || "",
               vendor: d.vendor || (d.device_name ? "Rockwell Automation" : ""),
               model: d.model || d.device_name || "",
               firmware: d.firmware || d.product_revision || "",
             }))
-            .filter((d: Device) => d.ip && d.model);
+            .filter((d: Device) => d.ip);
           setDevices(devs);
           return;
         }
@@ -112,7 +113,7 @@ export function DiscoverTab({ onImported }: { onImported?: () => void }) {
             devs.push({ ip: cols[0], vendor: cols[1], model: cols[2], firmware: cols[3] });
           }
         }
-        setDevices(devs.filter((d) => d.ip && d.model));
+        setDevices(devs.filter((d) => d.ip));
       }
     };
     reader.readAsText(f);
@@ -220,13 +221,21 @@ export function DiscoverTab({ onImported }: { onImported?: () => void }) {
                 className="bg-db-bg border border-db-border px-3 py-2 text-sm text-db-text focus:outline-none input-industrial"
               >
                 <option value="auto">Auto (all)</option>
-                <option value="cip">CIP (Rockwell)</option>
-                <option value="s7">S7 (Siemens)</option>
+                <option value="cip">CIP / EtherNet/IP</option>
+                <option value="s7">Siemens S7</option>
                 <option value="modbus">Modbus TCP</option>
+                <option value="bacnet">BACnet/IP + MS/TP</option>
+                <option value="opcua">OPC UA</option>
+                <option value="ads">TwinCAT ADS</option>
+                <option value="sick">SICK SOPAS CoLa</option>
+                <option value="fox">Niagara Fox/FoxS</option>
+                <option value="ancillary">WCS / BMS / Cold-Chain</option>
                 <option value="melsec">MELSEC (Mitsubishi)</option>
-                <option value="bacnet">BACnet/IP</option>
                 <option value="fins">FINS (Omron)</option>
                 <option value="srtp">GE-SRTP</option>
+                <option value="haas">Haas CNC</option>
+                <option value="fanuc">Fanuc CNC</option>
+                <option value="mazak">Mazak CNC</option>
                 <option value="http">HTTP (Legacy)</option>
               </select>
             </div>

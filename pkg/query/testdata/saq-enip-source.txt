@@ -1,0 +1,1 @@
+Synthetic EtherNet/IP ListIdentity adapter response from a local identification responder. Vendor ID 0 is intentionally retained as unknown. This fixture establishes parser compatibility, not manufacturer authenticity, a real device identity, or real-device tolerance.

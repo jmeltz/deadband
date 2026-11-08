@@ -1,8 +1,24 @@
 package inventory
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestIncompleteSeedsPreserveIdentity(t *testing.T) {
+	devices, err := parseCSV(strings.NewReader("IP,Vendor,Model,Firmware\n10.0.0.1,,,\n"))
+	if err != nil || len(devices) != 1 || devices[0].Model != "" {
+		t.Fatalf("CSV %+v %v", devices, err)
+	}
+	devices, err = parseJSON(strings.NewReader(`[{"ip":"10.0.0.1","serial":"known","mac":"00:11:22:33:44:55","protocol":"cip","port":44818,"slot":0,"extra":{"slot":"0"}}]`))
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("JSON %+v %v", devices, err)
+	}
+	d := devices[0]
+	if d.Model != "" || d.Serial != "known" || d.Protocol != "cip" || d.Port != 44818 || d.MAC == "" || d.Extra["slot"] != "0" {
+		t.Fatalf("lost identity metadata %+v", d)
+	}
+}
 
 func TestParseCSV(t *testing.T) {
 	devices, err := ParseFile("../../testdata/devices.csv", "csv")

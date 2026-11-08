@@ -9,8 +9,8 @@ import (
 	"github.com/jmeltz/deadband/pkg/site"
 )
 
-// Standard OT protocol ports
-var otPorts = []int{502, 44818, 102, 9600, 47808, 5007, 2222, 18245, 20000}
+// Standard OT, intralogistics/ASRS, and HVAC/BMS protocol ports
+var otPorts = []int{502, 44818, 102, 9600, 47808, 5007, 2222, 18245, 20000, 4840, 48898, 48899, 2111, 2112, 2122, 1911, 4911}
 
 // Standard IT service ports
 var itPorts = []int{22, 80, 443, 3389, 5900}

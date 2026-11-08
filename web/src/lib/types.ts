@@ -3,6 +3,12 @@ export interface Device {
   vendor: string;
   model: string;
   firmware: string;
+  serial?: string;
+  mac?: string;
+  protocol?: string;
+  port?: number;
+  slot?: number;
+  extra?: Record<string, string>;
 }
 
 export interface Advisory {
@@ -73,6 +79,7 @@ export interface CheckSummary {
 }
 
 export interface CheckResponse {
+  devices?: Device[];
   checked_at: string;
   db_updated: string;
   devices_checked: number;
@@ -175,7 +182,9 @@ export interface AssetVulnAdvisory {
 
 export interface AssetVulnState {
   checked_at: string;
-  status: "VULNERABLE" | "POTENTIAL" | "OK";
+  status: "VULNERABLE" | "POTENTIAL" | "OK" | "UNKNOWN" | "NO_MATCH";
+  reason?: string;
+  db_updated?: string;
   confidence: string;
   risk_score: number;
   advisories: AssetVulnAdvisory[];
@@ -206,6 +215,9 @@ export interface Asset {
   protocol?: string;
   port?: number;
   slot?: number;
+  observations?: {plan_id:string;plan_hash:string;field:string;value:string;raw_value?:string;protocol:string;operation:string;component:string;version_kind?:string;observed_at:string;conflict:boolean}[];
+  assessment_history?: AssetVulnState[];
+  overrides?: Record<string,string>;
   // Lifecycle
   status: string;
   // Vulnerability state
@@ -217,6 +229,8 @@ export interface CheckAssetsResponse {
   vulnerable: number;
   potential: number;
   ok: number;
+  unknown: number;
+  no_match: number;
 }
 
 export interface AssetListResponse {
@@ -262,6 +276,7 @@ export interface DiscoverSchedule {
   mode: string;
   interval: string;
   auto_check: boolean;
+  include_posture?: boolean;
   enabled: boolean;
   last_run?: string;
   next_run?: string;
@@ -656,4 +671,16 @@ export interface PolicyDrift {
   drift_type: "missing" | "extra" | "mismatch";
   description: string;
   severity: string;
+}
+
+export interface QueryPlan {
+  schema_version: number; id: string; purpose: "enrich" | "verify"; profile: string;
+  created_at: string; expires_at: string; plan_hash: string;
+  targets: { asset_id: string; ip: string; port: number; requested_fields: string[]; expected: { vendor: string; model: string; serial: string } }[];
+  budget: { max_targets: number; max_connections: number; max_requests: number; max_bytes_sent: number; max_bytes_received: number; timeout_ms: number; max_duration_ms: number; concurrency: number; requests_per_second: number };
+}
+export interface QueryRecord {
+	assessments?: {asset_id:string;firmware_before:string;firmware_after:string;previous?:AssetVulnState;current:AssetVulnState}[];
+  plan: QueryPlan; status: string; excluded: {asset_id:string;reason:string}[]; applied:boolean; error?:string;
+  result?: { plan_id:string; plan_hash:string; started_at:string; completed_at:string; outcomes:{asset_id:string;ip:string;status:string;observed_at:string;error?:string;metrics:{connections:number;requests:number;bytes_sent:number;bytes_received:number};observations:{field:string;value:string;raw_value?:string;protocol:string;operation:string;component:string;version_kind?:string}[]}[] };
 }

@@ -36,9 +36,26 @@ func Update(opts UpdateOpts) (*advisory.Database, error) {
 	// fall back to the per-file CSAF path. opts.Source == "github" forces
 	// per-file fetch and skips the snapshot probe entirely.
 	mode, snapshotURL := classifySource(opts.Source)
+	isOnlineMode := mode == sourceSnapshotDefault || mode == sourcePerFileGitHub
+
 	if mode == sourceSnapshotDefault || mode == sourceSnapshotURL {
 		db, err := loadFromSnapshot(snapshotURL, opts.Progress)
 		if err == nil {
+			if isOnlineMode {
+				now := time.Now().UTC()
+				snapMap := make(map[string]advisory.Advisory, len(db.Advisories))
+				for _, a := range db.Advisories {
+					snapMap[a.ID] = a
+				}
+				rolieCount, nvdCount := mergeSupplementalOnlineFeeds(snapMap, opts.Since, now, opts.Progress)
+				if rolieCount > 0 || nvdCount > 0 {
+					db.Advisories = db.Advisories[:0]
+					for _, a := range snapMap {
+						db.Advisories = append(db.Advisories, a)
+					}
+					db.Source = formatSupplementalSource(db.Source, rolieCount, nvdCount)
+				}
+			}
 			if saveErr := advisory.SaveDatabase(opts.DBPath, db); saveErr != nil {
 				return nil, fmt.Errorf("saving snapshot database: %w", saveErr)
 			}
@@ -53,15 +70,17 @@ func Update(opts UpdateOpts) (*advisory.Database, error) {
 		if mode == sourceSnapshotURL {
 			return nil, err
 		}
-		// Clear opts.Source so the per-file path uses GitHub, not the URL we
-		// just failed to fetch.
-		opts.Source = ""
+	}
+
+	localSource := ""
+	if mode == sourceLocalMirror {
+		localSource = opts.Source
 	}
 
 	// Load existing DB for merge
 	existing, _ := advisory.LoadDatabase(opts.DBPath)
 
-	paths, err := fetchIndex(opts.Source)
+	paths, err := fetchIndex(localSource)
 	if err != nil {
 		return nil, fmt.Errorf("fetching advisory index: %w", err)
 	}
@@ -118,7 +137,7 @@ func Update(opts UpdateOpts) (*advisory.Database, error) {
 		go func() {
 			defer wg.Done()
 			for p := range work {
-				doc, err := fetchAdvisory(opts.Source, p)
+				doc, err := fetchAdvisory(localSource, p)
 				if err != nil {
 					results <- result{path: p, err: err}
 				} else {
@@ -153,10 +172,16 @@ func Update(opts UpdateOpts) (*advisory.Database, error) {
 		fetched++
 	}
 
+	var rolieCount, nvdCount int
+	if isOnlineMode {
+		rolieCount, nvdCount = mergeSupplementalOnlineFeeds(existingMap, opts.Since, now, opts.Progress)
+		fetched += rolieCount + nvdCount
+	}
+
 	// Build final DB
 	db := &advisory.Database{
 		Updated: now,
-		Source:  "cisagov/CSAF",
+		Source:  formatSupplementalSource("cisagov/CSAF", rolieCount, nvdCount),
 	}
 	if existing != nil {
 		db.PreviousUpdated = &existing.Updated
@@ -241,9 +266,9 @@ func fetchAdvisory(source, path string) (*csafDoc, error) {
 }
 
 func parseCSAF(doc *csafDoc) []advisory.Advisory {
-	vendor, products, versions, _ := extractFromTree(doc.ProductTree.Branches)
+	vendor, products, versions := extractFromDoc(doc)
 
-	// Deduplicate products
+	// Deduplicate products and versions
 	seen := make(map[string]bool)
 	var uniqueProducts []string
 	for _, p := range products {
@@ -251,6 +276,14 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		if !seen[lower] {
 			seen[lower] = true
 			uniqueProducts = append(uniqueProducts, p)
+		}
+	}
+	verSeen := make(map[string]bool)
+	var uniqueVersions []string
+	for _, v := range versions {
+		if v != "" && !verSeen[v] {
+			verSeen[v] = true
+			uniqueVersions = append(uniqueVersions, v)
 		}
 	}
 
@@ -295,13 +328,17 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 	}
 
 	// Extract summary and sectors from document notes
-	var summary string
+	var summary, fallbackDesc string
 	var sectors []string
 	for _, note := range doc.Document.Notes {
 		switch note.Category {
 		case "summary":
 			if summary == "" {
 				summary = note.Text
+			}
+		case "description":
+			if fallbackDesc == "" {
+				fallbackDesc = note.Text
 			}
 		case "general":
 			// Parse "Critical Infrastructure Sectors:" from general notes
@@ -311,19 +348,26 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 			}
 		}
 	}
-
-	// Build URL from tracking ID
-	id := doc.Document.Tracking.ID
-	url := ""
-	for _, ref := range doc.Document.References {
-		if ref.Category == "self" && strings.Contains(ref.URL, "cisa.gov") {
-			url = ref.URL
-			break
+	if summary == "" {
+		summary = fallbackDesc
+	}
+	if summary == "" {
+		for _, vuln := range doc.Vulnerabilities {
+			for _, note := range vuln.Notes {
+				if note.Category == "summary" || note.Category == "description" {
+					summary = note.Text
+					break
+				}
+			}
+			if summary != "" {
+				break
+			}
 		}
 	}
-	if url == "" && id != "" {
-		url = fmt.Sprintf("https://www.cisa.gov/news-events/ics-advisories/%s", strings.ToLower(id))
-	}
+
+	// Resolve canonical advisory URL across CISA and non-CISA CSAF 2.0 publishers
+	id := doc.Document.Tracking.ID
+	url := resolveCSAFURL(doc)
 
 	published := doc.Document.Tracking.InitialReleaseDate
 	if published == "" {
@@ -343,7 +387,7 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		Title:            doc.Document.Title,
 		Vendor:           vendor,
 		Products:         uniqueProducts,
-		AffectedVersions: versions,
+		AffectedVersions: uniqueVersions,
 		CVSSv3Max:        maxCVSS,
 		CVEs:             cves,
 		URL:              url,
@@ -353,6 +397,66 @@ func parseCSAF(doc *csafDoc) []advisory.Advisory {
 		Sectors:          sectors,
 		Remediations:     remediations,
 	}}
+}
+
+func resolveCSAFURL(doc *csafDoc) string {
+	id := doc.Document.Tracking.ID
+	upperID := strings.ToUpper(id)
+	isCISA := strings.HasPrefix(upperID, "ICSA-") || strings.HasPrefix(upperID, "ICSMA-") ||
+		strings.Contains(strings.ToLower(doc.Document.Publisher.Namespace), "cisa.gov")
+
+	if isCISA {
+		for _, ref := range doc.Document.References {
+			if ref.Category == "self" && strings.Contains(ref.URL, "cisa.gov") && !strings.HasSuffix(strings.ToLower(ref.URL), ".json") {
+				return ref.URL
+			}
+		}
+		for _, ref := range doc.Document.References {
+			if strings.Contains(ref.URL, "cisa.gov") && !strings.HasSuffix(strings.ToLower(ref.URL), ".json") {
+				return ref.URL
+			}
+		}
+		if id != "" {
+			return fmt.Sprintf("https://www.cisa.gov/news-events/ics-advisories/%s", strings.ToLower(id))
+		}
+		return ""
+	}
+
+	// Non-CISA CSAF publisher (CERT@VDE, Beckhoff, SICK, WAGO, Pilz, Festo, etc.):
+	// 1. Prefer HTML/portal "self" reference (non-.json)
+	for _, ref := range doc.Document.References {
+		if ref.Category == "self" && isHTTPURL(ref.URL) && !strings.HasSuffix(strings.ToLower(ref.URL), ".json") {
+			return ref.URL
+		}
+	}
+	// 2. Prefer first external human-readable advisory reference
+	for _, ref := range doc.Document.References {
+		if ref.Category == "external" && isHTTPURL(ref.URL) {
+			return ref.URL
+		}
+	}
+	// 3. Fall back to canonical JSON "self" reference
+	for _, ref := range doc.Document.References {
+		if ref.Category == "self" && isHTTPURL(ref.URL) {
+			return ref.URL
+		}
+	}
+	// 4. Check vulnerability-level references
+	for _, vuln := range doc.Vulnerabilities {
+		for _, ref := range vuln.References {
+			if isHTTPURL(ref.URL) {
+				return ref.URL
+			}
+		}
+	}
+	if isHTTPURL(doc.Document.Publisher.Namespace) {
+		return doc.Document.Publisher.Namespace
+	}
+	return ""
+}
+
+func isHTTPURL(u string) bool {
+	return strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")
 }
 
 // parseSectors extracts sector names from CISA background notes text.
@@ -430,4 +534,69 @@ func filterPathsBySince(paths []string, since string) []string {
 		}
 	}
 	return filtered
+}
+
+var (
+	rolieFetcher = fetchROLIEAdvisories
+	nvdFetcher   = fetchNVDAdvisories
+)
+
+func mergeSupplementalOnlineFeeds(
+	existingMap map[string]advisory.Advisory,
+	sinceStr string,
+	now time.Time,
+	progress func(string),
+) (rolieAdded, nvdAdded int) {
+	var sinceTime time.Time
+	if sinceStr != "" {
+		if parsed, err := time.Parse("2006-01-02", sinceStr); err == nil {
+			sinceTime = parsed
+		}
+	}
+
+	rolieAdvs := rolieFetcher(nil, sinceTime, progress)
+	if len(rolieAdvs) > 0 {
+		mergeAdvisories(existingMap, rolieAdvs, now)
+		rolieAdded = len(rolieAdvs)
+	}
+
+	// Build set of CVEs already covered by structured CSAF advisories (CISA + ROLIE)
+	coveredCVEs := make(map[string]bool, len(existingMap)*2)
+	for _, a := range existingMap {
+		if strings.HasPrefix(strings.ToUpper(a.ID), "CVE-") {
+			continue
+		}
+		for _, cve := range a.CVEs {
+			coveredCVEs[strings.ToUpper(strings.TrimSpace(cve))] = true
+		}
+	}
+
+	nvdAdvs := nvdFetcher(nil, sinceTime, progress)
+	if len(nvdAdvs) > 0 {
+		var filteredNVD []advisory.Advisory
+		for _, a := range nvdAdvs {
+			if coveredCVEs[strings.ToUpper(a.ID)] {
+				continue
+			}
+			filteredNVD = append(filteredNVD, a)
+		}
+		if len(filteredNVD) > 0 {
+			mergeAdvisories(existingMap, filteredNVD, now)
+			nvdAdded = len(filteredNVD)
+		}
+	}
+
+	return rolieAdded, nvdAdded
+}
+
+func formatSupplementalSource(base string, rolieCount, nvdCount int) string {
+	var parts []string
+	parts = append(parts, base)
+	if rolieCount > 0 {
+		parts = append(parts, "csaf-rolie")
+	}
+	if nvdCount > 0 {
+		parts = append(parts, "nvd-2.0")
+	}
+	return strings.Join(parts, "+")
 }

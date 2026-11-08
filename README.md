@@ -1,6 +1,6 @@
 # deadband
 
-Read-only OT vulnerability scanner. Discovers industrial controllers, fingerprints firmware, matches against the [CISA ICS Advisory](https://www.cisa.gov/news-events/ics-advisories) feed (3,600+ advisories), and produces a self-contained HTML report.
+Read-only OT, intralogistics/ASRS, HVAC/cold-chain, and CNC vulnerability scanner. Discovers industrial controllers, fingerprints firmware, matches against [CISA ICS Advisories](https://www.cisa.gov/news-events/ics-advisories), OASIS CSAF 2.0 ROLIE feeds (CERT@VDE, Beckhoff, SICK, Pilz, WAGO, Festo, Phoenix Contact, Weidmüller, TURCK, Lenze, Pepperl+Fuchs), and targeted NVD 2.0 OEM advisories, and produces a self-contained HTML report.
 
 No agent. No cloud. No telemetry. No writes to OT devices.
 
@@ -37,25 +37,41 @@ bin/deadband -i devices.csv --min-confidence high
 
 ## Discovery
 
+### Targeted asset enrichment
+
+The local web Assets page supports **Enrich missing details** and **Verify firmware update** for selected known EtherNet/IP endpoint assets. Preview the exact targets, requested fields, and traffic limits before execution. Results retain observations, identity conflicts, execution metrics, and before/after advisory assessments on the existing asset IDs. Subnet posture scanning is a separate, explicit discovery option.
+
+The first bounded query profile is `enip-identity-tcp-v1`: one unicast TCP/44818 ListIdentity per endpoint, with no session registration, backplane enumeration, broadcast, or protocol fallback. Chassis-slot assets require a component-specific profile and are excluded from this identity workflow.
+
+```bash
+bin/deadband query plan --targets targets.json --purpose enrich -o plan.json
+bin/deadband query run --plan plan.json --dry-run
+bin/deadband query run --plan plan.json -o observations.json
+```
+
+See [targeted enrichment](docs/targeted-enrichment.md) for the target format, API, limits, and rollout details, and [platform cohesion](docs/platform-cohesion.md) for the remaining product improvements.
+
 Every probe is read-only by construction. None require authentication. Tests assert no unexpected bytes hit the wire.
 
 | Mode | Port | Vendors |
 |---|---|---|
-| `cip` | UDP 44818 | Rockwell Automation |
-| `s7` | TCP 102 | Siemens (S7-300/400/1200/1500) |
-| `modbus` | TCP 502 | Schneider, ABB, Delta, Moxa, Phoenix Contact, WAGO, Emerson, Yokogawa, Eaton |
+| `cip` | UDP/TCP 44818 | Rockwell, Beckhoff, SICK, SEW-EURODRIVE, Festo, Pilz, Cognex, Keyence, Danfoss, WAGO, ABB, Moxa |
+| `s7` | TCP 102 (+ HTTPS/SNMP fallback) | Siemens (S7-300/400/1200/1500/ET200SP, incl. PUT/GET-disabled TIA Portal CPUs) |
+| `modbus` | TCP 502 (Units 1, 255, 0) | Schneider, ABB, Danfoss, CAREL, Copeland, Vertiv, Interroll, Pulseroller, SEW-EURODRIVE, WAGO, Moxa |
+| `bacnet` | UDP 47808 (+ routed MS/TP) | Johnson Controls, Trane, Carrier/Automated Logic, Siemens, Honeywell, Tridium, Danfoss, CAREL, Copeland, Vertiv/Liebert, Distech, Delta Controls, LOYTEC, SAUTER |
+| `opcua` | TCP 4840 | KNAPP KiSoft, Swisslog, Dematic, Vanderlande, TGW, SSI Schaefer, AutoStore, Siemens, Beckhoff, B&R |
+| `ads` | UDP 48899 / TCP 48898 | Beckhoff TwinCAT 2/3 IPCs & CX/C6xxx/CPxxxx shuttle controllers |
+| `sick` | TCP 2111, 2112, 2122 | SICK SOPAS CoLa-A, CoLa-B, and CoLa-2 barcode scanners & LiDARs (`CLV6xx`, `MSC800`, `Lector`, `TiM`, `LMS`) |
+| `fox` | TCP 1911 / TLS 4911 | Tridium Niagara Framework (`JACE-8000/9000`, Honeywell `WEBs-N4`, JCI `FX`, Distech `EC-Net 4`, Alerton, Vykon) |
+| `ancillary` | HTTP/S 80, 443, 8080, 8443 | KNAPP KiSoft, Swisslog SynQ, Dematic, Interroll, Pulseroller, Danfoss `AK-SM`, Copeland `XWEB`, CAREL `Boss`/`pCOWeb`, Metasys, Tracer SC+, WebCTRL, Desigo CC, Vaisala `viewLinc`, Testo `Saveris`, ELPRO, APC `InRow`/`NetBotz`, Vertiv `Liebert`, Zebra `Link-OS` (HTTP only — never probes `TCP/9100`) |
 | `melsec` | TCP 5007 | Mitsubishi (iQ-R/F, Q, L, FX5) |
 | `fins` | UDP 9600 | Omron (CJ, CP, CS, NJ, NX) |
 | `srtp` | TCP 18245 | Emerson / GE (PACSystems, Series 90, VersaMax) |
-| `opcua` | TCP 4840 | cross-vendor industrial servers |
 | `haas` | TCP 5051 | Haas Automation NGC controllers |
-| `fanuc` | TCP 21 | Fanuc CNC + R-30iB robots (FTP banner) |
+| `fanuc` | TCP 21 / 8193 | Fanuc CNC + R-30iB robots (FTP banner + FOCAS2) |
+| `mazak` | HTTP 5000 / 80 / 8080 | Mazak Smooth CNC (MTConnect read-only `/probe`) |
 
-`--mode auto` (default) runs all of the above concurrently and merges results.
-
-**BACnet/IP** lives behind a build tag — `go build -tags bacnet ./cmd/deadband` — and is excluded from default builds.
-
-**Fanuc FOCAS2** (TCP/8193) is stubbed pending live-device access; the FTP banner-grab handles common fingerprinting today.
+`--mode auto` (default) runs all of the above concurrently and merges results, preserving multi-slot CIP chassis modules and routed BACnet MS/TP field controllers behind BACnet/IP routers.
 
 ## HTML Report
 
@@ -99,10 +115,12 @@ cd web && npm run dev          # Frontend with /api/* proxy
 
 | `--source` value | Behavior |
 |---|---|
-| empty (default) | Try the deadband-hosted snapshot, fall back to per-file CSAF |
-| `github` | Force per-file fetch from `cisagov/CSAF` |
-| `https://...` | Specific snapshot URL with `.sha256` verification |
-| `/local/path/` | Local CSAF mirror (full air-gap) |
+| empty (default) | Fetch deadband-hosted CISA snapshot (falling back to `cisagov/CSAF`), plus live TLP:WHITE OASIS CSAF 2.0 ROLIE feeds (CERT@VDE, Beckhoff, SICK, Pilz, WAGO, Festo, TURCK, Lenze, Pepperl+Fuchs, Phoenix Contact, Weidmüller) and targeted NVD 2.0 OEM lookups (KNAPP, Dematic, Swisslog, Vaisala, Testo, ELPRO, Sensaphone, Distech, Belimo) |
+| `github` | Force per-file fetch from `cisagov/CSAF`, plus OASIS CSAF ROLIE and targeted NVD 2.0 feeds |
+| `https://...` | Specific snapshot URL with `.sha256` verification only (no external ROLIE/NVD calls) |
+| `/local/path/` | Local CSAF mirror only (full air-gap isolation — zero outbound network calls) |
+
+Set `DEADBAND_NVD_API_KEY` (optional) to increase NVD 2.0 rate limits during `--update`.
 
 ```bash
 bin/deadband --update                                # default: snapshot + fallback
@@ -200,12 +218,14 @@ cmd/deadband/main.go       CLI entrypoint
 pkg/advisory/              Advisory DB load/save
 pkg/asset/                 Asset inventory + vulnerability state
 pkg/cli/banner.go          Safety banner
-pkg/discover/              Active discovery (CIP, S7, Modbus, MELSEC, FINS, SRTP, OPC UA, Haas, Fanuc)
+pkg/discover/              Active read-only discovery (CIP, S7, Modbus, BACnet, OPC UA, ADS, SICK, Niagara Fox, Ancillary WCS/BMS, MELSEC, FINS, SRTP, Haas, Fanuc, Mazak)
 pkg/inventory/             CSV / JSON / flat parsing
 pkg/matcher/               Vendor, model, version matching
 pkg/output/                Text, CSV, JSON, HTML, SARIF writers
+pkg/pcap/                  Passive Ethernet/VLAN PCAP dissection
+pkg/posture/               Two-phase OT-safe subnet posture & IEC 62443 / NIST CSF / NERC CIP rules
 pkg/server/                HTTP API + report export
-pkg/updater/               CISA CSAF fetch (snapshot + per-file)
+pkg/updater/               CISA CSAF + OASIS ROLIE + targeted NVD 2.0 advisory ingestion
 web/                       Next.js frontend
 ```
 

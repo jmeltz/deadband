@@ -27,13 +27,15 @@ var allMappings = []ControlMapping{
 	{IEC62443, "62443-2-3:2015 4.2.3.2", "Patch Prioritization", "enrichment", "KEV/EPSS risk scoring prioritizes patch application order"},
 	{IEC62443, "62443-2-3:2015 4.2.3.7", "Patch Tracking", "diffing", "Inventory diff reports track remediation progress across snapshots"},
 	{IEC62443, "62443-3-3:2013 SR 1.1", "Human User Identification", "discovery", "Device identification provides asset context for access control planning"},
+	{IEC62443, "62443-3-3:2013 SR 4.1", "Information Confidentiality", "posture", "Detects cleartext HTTP management portals on BMS, refrigeration, and WCS controllers"},
+	{IEC62443, "62443-3-3:2013 SR 5.1", "Network Segmentation", "posture", "Identifies mixed IT/OT subnets and Windows RDP/SMB co-exposure on PC-based PLCs"},
 	{IEC62443, "62443-3-3:2013 SR 7.6", "Network and Security Configuration Monitoring", "matching", "Identifies devices with known vulnerabilities requiring configuration review"},
 	{IEC62443, "62443-4-2:2019 CR 2.4", "Software Integrity", "version_check", "Firmware version verification against advisory-defined affected ranges"},
 
 	// NIST CSF 2.0
-	{NISTCSF2, "ID.AM-01", "Asset Inventory", "discovery", "Automated device enumeration across 7+ ICS protocols (CIP, S7, Modbus, MELSEC, BACnet, FINS, SRTP)"},
+	{NISTCSF2, "ID.AM-01", "Asset Inventory", "discovery", "Automated device enumeration across 13+ ICS, ASRS, and BMS protocols (CIP, S7, Modbus, MELSEC, BACnet, FINS, SRTP, OPC UA, ADS, SICK CoLa, Niagara Fox)"},
 	{NISTCSF2, "ID.AM-02", "Software Inventory", "version_check", "Firmware version identification from protocol-native identity responses"},
-	{NISTCSF2, "ID.RA-01", "Vulnerability Identification", "matching", "Cross-reference firmware against 3,600+ CISA ICS-CERT advisories"},
+	{NISTCSF2, "ID.RA-01", "Vulnerability Identification", "matching", "Cross-reference firmware against CISA ICS-CERT, OASIS CSAF ROLIE (CERT@VDE, Beckhoff, SICK, WAGO, Pilz), and NVD advisories"},
 	{NISTCSF2, "ID.RA-02", "Threat Intelligence", "enrichment", "CISA KEV integration identifies CVEs actively exploited in the wild"},
 	{NISTCSF2, "ID.RA-03", "Risk Assessment", "enrichment", "Composite risk scoring combines KEV status, EPSS probability, and CVSS severity"},
 	{NISTCSF2, "ID.IM-01", "Improvement Process", "diffing", "Delta tracking across inventory snapshots demonstrates remediation progress"},

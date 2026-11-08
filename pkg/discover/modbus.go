@@ -146,49 +146,49 @@ func ParseReadDeviceIDResponse(pdu []byte) (objects map[byte]string, moreFollows
 // --- Scanner ---
 
 // ModbusTCPIdentify performs Modbus TCP Read Device Identification against a single IP.
-// Tries regular identification first (objects 0x00-0x06), falls back to basic (0x00-0x02).
+// Tries Unit IDs 0x01, 0xFF (255), and 0x00 with regular (0x02) then basic (0x01) identification.
 // Returns nil, nil if the host doesn't support device identification.
 func ModbusTCPIdentify(ip string, timeout time.Duration) (*ModbusIdentity, error) {
-	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", ModbusTCPPort))
-
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return nil, nil
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
-
-	// Try regular identification first (gets model name, product name, etc.)
-	id, err := modbusReadDeviceID(conn, devIDRegular, 0x00)
-	if err == nil {
-		return id, nil
-	}
-
-	// Fall back to basic identification on a fresh connection
-	conn.Close()
-	conn2, err2 := net.DialTimeout("tcp", addr, timeout)
-	if err2 != nil {
-		return nil, nil
-	}
-	defer conn2.Close()
-	conn2.SetDeadline(time.Now().Add(timeout))
-
-	id, err = modbusReadDeviceID(conn2, devIDBasic, 0x00)
-	if err != nil {
-		return nil, nil
-	}
-	return id, nil
+	return ModbusTCPIdentifyPort(ip, ModbusTCPPort, timeout)
 }
 
-// modbusReadDeviceID performs one or more Read Device ID transactions,
-// following "More Follows" continuations until all objects are collected.
+// ModbusTCPIdentifyPort performs Modbus TCP Read Device Identification against ip:port.
+func ModbusTCPIdentifyPort(ip string, port int, timeout time.Duration) (*ModbusIdentity, error) {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	candidateUnits := []byte{modbusDefaultUnit, 0xFF, 0x00}
+	readCodes := []byte{devIDRegular, devIDBasic}
+
+	for _, unitID := range candidateUnits {
+		for _, readCode := range readCodes {
+			conn, err := net.DialTimeout("tcp", addr, timeout)
+			if err != nil {
+				return nil, nil
+			}
+			_ = conn.SetDeadline(time.Now().Add(timeout))
+			id, err := modbusReadDeviceIDUnit(conn, unitID, readCode, 0x00)
+			conn.Close()
+			if err == nil && id != nil {
+				return id, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// modbusReadDeviceID performs one or more Read Device ID transactions on default unit 0x01.
 func modbusReadDeviceID(conn net.Conn, readCode byte, startObjID byte) (*ModbusIdentity, error) {
+	return modbusReadDeviceIDUnit(conn, modbusDefaultUnit, readCode, startObjID)
+}
+
+// modbusReadDeviceIDUnit performs one or more Read Device ID transactions for unitID,
+// following "More Follows" continuations until all objects are collected.
+func modbusReadDeviceIDUnit(conn net.Conn, unitID byte, readCode byte, startObjID byte) (*ModbusIdentity, error) {
 	allObjects := make(map[byte]string)
 	objID := startObjID
 	txnID := uint16(1)
 
 	for {
-		req := buildReadDeviceIDRequest(txnID, modbusDefaultUnit, readCode, objID)
+		req := buildReadDeviceIDRequest(txnID, unitID, readCode, objID)
 		if _, err := conn.Write(req); err != nil {
 			return nil, err
 		}
@@ -275,14 +275,41 @@ func normalizeModbusVendor(raw string) string {
 		canonical string
 	}{
 		{"schneider", "Schneider Electric"},
+		{"apc", "Schneider Electric"},
 		{"hitachi energy", "Hitachi Energy"},
+		{"delta controls", "Delta Controls"},
 		{"delta electron", "Delta Electronics"},
 		{"phoenix contact", "Phoenix Contact"},
+		{"johnson controls", "Johnson Controls"},
+		{"distech", "Distech Controls"},
+		{"sew-eurodrive", "SEW-EURODRIVE"},
+		{"sew eurodrive", "SEW-EURODRIVE"},
+		{"weidmüller", "Weidmüller"},
+		{"weidmueller", "Weidmüller"},
+		{"weidmuller", "Weidmüller"},
 		{"general electric", "GE Vernova"},
 		{"ge vernova", "GE Vernova"},
 		{"mitsubishi", "Mitsubishi Electric"},
 		{"rockwell", "Rockwell Automation"},
 		{"allen-bradley", "Rockwell Automation"},
+		{"interroll", "Interroll"},
+		{"pulseroller", "Pulseroller"},
+		{"conveylinx", "Pulseroller"},
+		{"copeland", "Copeland"},
+		{"dixell", "Copeland"},
+		{"danfoss", "Danfoss"},
+		{"carel", "CAREL"},
+		{"vertiv", "Vertiv"},
+		{"liebert", "Vertiv"},
+		{"trane", "Trane"},
+		{"carrier", "Carrier"},
+		{"belimo", "Belimo"},
+		{"loytec", "LOYTEC"},
+		{"sauter", "SAUTER"},
+		{"sick", "SICK"},
+		{"festo", "Festo"},
+		{"pilz", "Pilz"},
+		{"turck", "TURCK"},
 		{"yokogawa", "Yokogawa"},
 		{"honeywell", "Honeywell"},
 		{"beckhoff", "Beckhoff"},

@@ -25,22 +25,22 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-56 shrink-0 border-r border-db-border bg-db-bg flex flex-col">
-      <div className="px-4 py-5 border-b border-db-border">
+    <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-db-border bg-db-bg flex flex-col">
+      <div className="px-4 py-2 md:py-5 border-b border-db-border">
         <Link href="/" className="flex items-center gap-2.5">
           <img src="/logo.png" alt="deadband" className="w-8 h-8 shrink-0" />
           <div>
             <h1 className="font-heading text-base font-semibold text-db-text leading-tight">
               deadband
             </h1>
-            <p className="text-[10px] text-db-muted font-mono tracking-wider uppercase">
+            <p className="hidden md:block text-[10px] text-db-muted font-mono tracking-wider uppercase">
               OT Asset & Vuln Scanner
             </p>
           </div>
         </Link>
       </div>
 
-      <nav className="flex-1 px-2 py-3 space-y-0.5">
+      <nav className="flex md:block flex-1 gap-1 overflow-x-auto md:overflow-visible px-2 py-2 md:py-3 md:space-y-0.5">
         {nav.map(({ href, label, icon: Icon }) => {
           const active =
             href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -48,8 +48,9 @@ export function Sidebar() {
             <Link
               key={href}
               href={href}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2.5 px-3 py-2 rounded-sm text-sm transition-colors",
+                "flex shrink-0 items-center gap-2.5 px-3 py-2 rounded-sm text-sm transition-colors",
                 active
                   ? "bg-db-teal-dim text-db-teal-light font-medium nav-active-glow"
                   : "text-db-muted hover:text-db-text hover:bg-db-surface",
@@ -62,7 +63,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="px-4 py-3 border-t border-db-border">
+      <div className="hidden md:block px-4 py-3 border-t border-db-border">
         <p className="text-[10px] text-db-muted font-mono">
           READ-ONLY — no OT writes
         </p>

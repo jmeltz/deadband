@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { EnrichmentPanel } from "@/components/assets/EnrichmentPanel";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { useAssets, useDeleteAsset, useCheckAssets } from "@/lib/hooks/useAssets";
@@ -9,7 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { formatDate, relativeTime } from "@/lib/utils/format";
 import type { Asset } from "@/lib/types";
 
-const VULN_STATUSES = ["VULNERABLE", "POTENTIAL", "OK"] as const;
+const VULN_STATUSES = ["VULNERABLE", "POTENTIAL", "OK", "NO_MATCH", "UNKNOWN"] as const;
 
 export default function AssetsPage() {
   const [search, setSearch] = useState("");
@@ -90,20 +91,7 @@ export default function AssetsPage() {
     setImporting(true);
     setImportMessage(null);
     try {
-      const text = await file.text();
-      const ext = file.name.toLowerCase().endsWith(".json") ? "json" : "csv";
-      const res = await fetch(`/api/check/upload?format=${ext}`, {
-        method: "POST",
-        body: text,
-        headers: {
-          "Content-Type": ext === "json" ? "application/json" : "text/csv",
-        },
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || res.statusText);
-      }
-      const result = await res.json();
+      const result = await api.checkUpload(file);
       const devices = result?.devices ?? [];
       if (devices.length > 0) {
         await api.importAssets({ devices, source: `import:${file.name}` });
@@ -134,7 +122,7 @@ export default function AssetsPage() {
               you don&apos;t want included.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -157,8 +145,8 @@ export default function AssetsPage() {
               {checkAssets.isPending
                 ? "Checking..."
                 : selectedCount > 0
-                  ? `Recheck ${selectedCount}`
-                  : "Recheck All"}
+                  ? `Recheck advisories (${selectedCount})`
+                  : "Recheck advisories for all"}
             </Button>
           </div>
         </div>
@@ -174,6 +162,8 @@ export default function AssetsPage() {
           </p>
         )}
       </Card>
+
+      <EnrichmentPanel ids={Array.from(selected)} />
 
       <Card className="p-0 overflow-hidden">
         <div className="px-4 py-3 border-b border-db-border flex flex-wrap items-end gap-3">
@@ -295,6 +285,8 @@ const statusColors: Record<string, string> = {
     "bg-status-critical/20 text-status-critical border-status-critical/40",
   POTENTIAL: "bg-orange-500/20 text-orange-400 border-orange-500/40",
   OK: "bg-status-ok/20 text-status-ok border-status-ok/40",
+  NO_MATCH: "bg-db-border text-db-muted border-db-border",
+  UNKNOWN: "bg-db-border text-db-muted border-db-border",
 };
 
 function AssetRow({

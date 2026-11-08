@@ -23,6 +23,17 @@ func TestModelMatches(t *testing.T) {
 		{"", []string{"1756-EN2T"}, false, ConfidenceLow},
 		// AC500 substring
 		{"AC500", []string{"AC500", "AC500-S"}, true, ConfidenceHigh},
+		// Copeland XWEB 500D EVO -> XWEB 500D PRO / XWEB 300D PRO family expansion
+		{"XWEB500D EVO", []string{"XWEB 300D PRO", "XWEB 500D PRO"}, true, ConfidenceMedium},
+		// Beckhoff industrial PCs -> TwinCAT runtime advisories
+		{"CX7080", []string{"TwinCAT 3"}, true, ConfidenceMedium},
+		{"C6030-0060", []string{"TwinCAT"}, true, ConfidenceMedium},
+		// APC Smart-UPS NMC -> NMC2/NMC3 advisories
+		{"AP9631", []string{"NMC2"}, true, ConfidenceMedium},
+		// B&R Automation PC -> Automation Runtime
+		{"APC910", []string{"Automation Runtime"}, true, ConfidenceMedium},
+		// Tridium JACE -> Niagara Framework
+		{"JACE-8000", []string{"Niagara Framework"}, true, ConfidenceMedium},
 	}
 	for _, tt := range tests {
 		match, conf := ModelMatches(tt.model, tt.products)

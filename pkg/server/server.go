@@ -7,10 +7,10 @@ import (
 
 	"github.com/jmeltz/deadband/pkg/acl"
 	"github.com/jmeltz/deadband/pkg/advisory"
+	"github.com/jmeltz/deadband/pkg/asa"
 	"github.com/jmeltz/deadband/pkg/cli"
 	"github.com/jmeltz/deadband/pkg/discover"
 	"github.com/jmeltz/deadband/pkg/enrichment"
-	"github.com/jmeltz/deadband/pkg/asa"
 	"github.com/jmeltz/deadband/pkg/integration"
 	"github.com/jmeltz/deadband/pkg/posture"
 	"github.com/jmeltz/deadband/pkg/sentinel"
@@ -32,6 +32,8 @@ type Server struct {
 	integrationStore  *integration.Store
 	sentinelStore     *sentinel.Store
 	asaSnapshotStore  *asa.Store
+	queryExecutor     queryExecution
+	assetPath         string
 }
 
 // New creates a new Server that serves the deadband API.
@@ -115,6 +117,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/assets/{id}", s.handleGetAsset)
 	s.mux.HandleFunc("POST /api/assets", s.handleImportAssets)
 	s.mux.HandleFunc("POST /api/assets/check", s.handleCheckAssets)
+	s.mux.HandleFunc("POST /api/queries/preview", s.handlePreviewQuery)
+	s.mux.HandleFunc("GET /api/queries", s.handleQueryHistory)
+	s.mux.HandleFunc("GET /api/queries/{id}", s.handleGetQuery)
+	s.mux.HandleFunc("POST /api/queries/{id}/execute", s.handleExecuteQuery)
+	s.mux.HandleFunc("POST /api/queries/{id}/cancel", s.handleCancelQuery)
+	s.mux.HandleFunc("GET /api/queries/{id}/access.csv", s.handleQueryAccess)
 	s.mux.HandleFunc("PUT /api/assets/{id}", s.handleUpdateAsset)
 	s.mux.HandleFunc("DELETE /api/assets/{id}", s.handleDeleteAsset)
 	s.mux.HandleFunc("POST /api/assets/bulk", s.handleBulkUpdateAssets)

@@ -7,13 +7,15 @@ import (
 
 // VulnState captures the vulnerability assessment state of an asset.
 type VulnState struct {
-	CheckedAt  time.Time       `json:"checked_at"`
-	Status     string          `json:"status"`     // VULNERABLE, POTENTIAL, OK
-	Confidence string          `json:"confidence"`  // HIGH, MEDIUM, LOW
-	RiskScore  float64         `json:"risk_score"`
-	Advisories []VulnAdvisory  `json:"advisories,omitempty"`
-	CVECount   int             `json:"cve_count"`
-	KEVCount   int             `json:"kev_count"`
+	CheckedAt  time.Time      `json:"checked_at"`
+	Status     string         `json:"status"`     // VULNERABLE, POTENTIAL, OK
+	Confidence string         `json:"confidence"` // HIGH, MEDIUM, LOW
+	RiskScore  float64        `json:"risk_score"`
+	Advisories []VulnAdvisory `json:"advisories,omitempty"`
+	CVECount   int            `json:"cve_count"`
+	KEVCount   int            `json:"kev_count"`
+	DBUpdated  time.Time      `json:"db_updated,omitempty"`
+	Reason     string         `json:"reason,omitempty"`
 }
 
 // VulnAdvisory is a matched advisory stored on an asset.
@@ -32,6 +34,12 @@ func (s *Store) UpdateVulnState(id string, state *VulnState) bool {
 	a := s.Get(id)
 	if a == nil {
 		return false
+	}
+	if a.VulnState != nil {
+		a.AssessmentHistory = append(a.AssessmentHistory, *a.VulnState)
+		if len(a.AssessmentHistory) > 100 {
+			a.AssessmentHistory = a.AssessmentHistory[len(a.AssessmentHistory)-100:]
+		}
 	}
 	a.VulnState = state
 	return true

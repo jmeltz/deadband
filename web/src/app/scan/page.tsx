@@ -7,28 +7,36 @@ import { useDiscover } from "@/lib/hooks/useDiscover";
 
 const MODES = [
   { value: "auto", label: "Auto (all protocols)" },
-  { value: "haas", label: "Haas (CNC, TCP/5051)" },
-  { value: "fanuc", label: "Fanuc (CNC, FTP banner)" },
-  { value: "cip", label: "CIP / EtherNet/IP" },
-  { value: "s7", label: "Siemens S7" },
-  { value: "modbus", label: "Modbus TCP" },
-  { value: "melsec", label: "Mitsubishi MELSEC" },
-  { value: "fins", label: "Omron FINS" },
-  { value: "srtp", label: "GE SRTP" },
-  { value: "opcua", label: "OPC UA" },
+  { value: "cip", label: "CIP / EtherNet/IP (UDP/TCP 44818)" },
+  { value: "s7", label: "Siemens S7 + TIA Portal/SNMP (TCP/102)" },
+  { value: "modbus", label: "Modbus TCP (TCP/502)" },
+  { value: "bacnet", label: "BACnet/IP + Routed MS/TP (UDP/47808)" },
+  { value: "opcua", label: "OPC UA (TCP/4840)" },
+  { value: "ads", label: "Beckhoff TwinCAT ADS (UDP/48899, TCP/48898)" },
+  { value: "sick", label: "SICK SOPAS CoLa-A/B/2 (TCP/2111, 2112, 2122)" },
+  { value: "fox", label: "Tridium Niagara Fox/FoxS (TCP/1911, 4911)" },
+  { value: "ancillary", label: "Ancillary WCS / BMS / Cold-Chain (HTTP/TLS)" },
+  { value: "melsec", label: "Mitsubishi MELSEC (TCP/5007)" },
+  { value: "fins", label: "Omron FINS (UDP/9600)" },
+  { value: "srtp", label: "Emerson / GE SRTP (TCP/18245)" },
+  { value: "haas", label: "Haas CNC (TCP/5051)" },
+  { value: "fanuc", label: "Fanuc CNC / Robot (FTP/FOCAS)" },
+  { value: "mazak", label: "Mazak Smooth CNC (MTConnect)" },
+  { value: "http", label: "Legacy HTTP Banner" },
 ];
 
 export default function ScanPage() {
   const [cidr, setCidr] = useState("");
   const [mode, setMode] = useState("auto");
   const [autoCheck, setAutoCheck] = useState(true);
+  const [includePosture, setIncludePosture] = useState(false);
   const { status, progress, result, error, start, reset } = useDiscover();
 
   const running = status === "running";
 
   const handleStart = () => {
     if (!cidr.trim()) return;
-    start({ cidr: cidr.trim(), mode, auto_check: autoCheck });
+    start({ cidr: cidr.trim(), mode, auto_check: autoCheck, include_posture: includePosture });
   };
 
   return (
@@ -37,9 +45,10 @@ export default function ScanPage() {
         <div>
           <h3 className="font-heading text-sm font-semibold">Discovery Scan</h3>
           <p className="text-xs text-db-muted mt-0.5">
-            Read-only protocol probes against a CIDR range. New in v0.5: Haas
-            Q-commands and Fanuc FTP-banner fingerprinting for the job-shop
-            market. No write operations are performed on any target.
+            Read-only protocol probes against a CIDR range across PLC, ASRS /
+            intralogistics (KNAPP, Beckhoff ADS, SICK SOPAS), HVAC / cold-chain
+            (BACnet/IP + routed MS/TP, Niagara Fox, BMS/refrigeration portals),
+            and CNC protocols. Zero write operations are performed on any target.
           </p>
         </div>
 
@@ -84,6 +93,12 @@ export default function ScanPage() {
             />
             Auto-check discovered devices against advisory DB
           </label>
+
+          <label className="flex items-center gap-2 text-xs text-db-text">
+            <input type="checkbox" checked={includePosture} onChange={e => setIncludePosture(e.target.checked)} disabled={running} />
+            Include subnet posture scan (additional OT and IT service probes)
+          </label>
+          <p className="text-xs text-db-muted">To query known assets for missing details or current firmware, use Asset enrichment on the Assets page.</p>
 
           <div className="flex items-center gap-2 mt-2">
             <Button
