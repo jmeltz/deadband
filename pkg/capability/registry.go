@@ -39,8 +39,8 @@ type Endpoint struct {
 }
 
 // Current returns fresh data so a consumer cannot mutate the registry used by
-// another request. Stable means a shipped executable contract; Lab is a product
-// validation workflow, not an alternative wire profile or maturity guarantee.
+// another request. Stable means a shipped executable contract; lab profiles
+// are limited to the product validation workflow pending device-family testing.
 func Current() Registry {
 	profiles := []Profile{{Key: "enip_identity_tcp", Name: "EtherNet/IP endpoint identity", Protocol: "enip", Status: "stable", Executable: true, WireProfileID: query.ProfileENIPIdentityTCP, SchemaVersions: []int{query.SchemaVersion}, Transports: []Endpoint{{Transport: "tcp", Port: 44818}}, RequestedFields: []string{"vendor", "model", "firmware", "serial"}, Validation: "protocol_contract_and_loopback", DeviceValidationRequired: true},
 		{Key: "modbus_known_unit", Name: "Modbus identification at a known unit", Protocol: "modbus", Status: "lab", Executable: true, WireProfileID: query.ProfileModbusIdentityTCP, SchemaVersions: []int{2}, Transports: []Endpoint{{Transport: "tcp", Port: 502}}, RequestedFields: []string{"vendor", "product_code", "identity_revision"}, Validation: "protocol_contract_and_loopback", DeviceValidationRequired: true}}
