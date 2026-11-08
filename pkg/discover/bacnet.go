@@ -65,15 +65,16 @@ const (
 
 // BACnetIdentity holds parsed identity from BACnet Who-Is/ReadProperty responses.
 type BACnetIdentity struct {
-	VendorID         uint16
-	VendorName       string
-	ModelName        string
-	FirmwareRevision string
-	ObjectName       string
-	Location         string
-	DeviceInstance   uint32
-	SourceNet        uint16
-	SourceAddr       []byte
+	VendorID                   uint16
+	VendorName                 string
+	ModelName                  string
+	FirmwareRevision           string
+	ApplicationSoftwareVersion string
+	ObjectName                 string
+	Location                   string
+	DeviceInstance             uint32
+	SourceNet                  uint16
+	SourceAddr                 []byte
 }
 
 // --- Frame builders ---
@@ -620,13 +621,13 @@ func BACnetIdentifyAllPort(ip string, port int, timeout time.Duration) ([]BACnet
 			c.ModelName = strings.TrimSpace(val)
 		}
 
-		// Phase 3: ReadProperty firmware-revision (44), fallback application-software-version (12)
+		// Preserve application software separately; it is not firmware evidence.
 		if val, ok := readPropertyValue(conn, buf, nextInvoke(), c.DeviceInstance, propFirmwareRevision, c.SourceNet, c.SourceAddr, propTimeout); ok {
 			c.FirmwareRevision = strings.TrimSpace(val)
 		}
 		if c.FirmwareRevision == "" {
 			if val, ok := readPropertyValue(conn, buf, nextInvoke(), c.DeviceInstance, propAppSoftwareVersion, c.SourceNet, c.SourceAddr, propTimeout); ok {
-				c.FirmwareRevision = strings.TrimSpace(val)
+				c.ApplicationSoftwareVersion = strings.TrimSpace(val)
 			}
 		}
 
@@ -672,14 +673,25 @@ func BACnetIdentityToDevice(ip string, id *BACnetIdentity) inventory.Device {
 	}
 	extra := map[string]string{
 		"device_instance": strconv.FormatUint(uint64(id.DeviceInstance), 10),
+		"component_kind":  "routed_device",
+		"component_path":  fmt.Sprintf("bacnet/device/%d", id.DeviceInstance),
+	}
+	if id.FirmwareRevision != "" {
+		extra["version_kind"] = "bacnet_firmware_revision"
+	}
+	if id.ApplicationSoftwareVersion != "" {
+		extra["application_software_version"] = id.ApplicationSoftwareVersion
 	}
 	if id.Location != "" {
 		extra["location"] = id.Location
 	}
 	if id.SourceNet > 0 {
 		extra["bacnet_snet"] = strconv.FormatUint(uint64(id.SourceNet), 10)
+		extra["source_network"] = extra["bacnet_snet"]
 		if len(id.SourceAddr) > 0 {
 			extra["bacnet_sadr"] = hex.EncodeToString(id.SourceAddr)
+			extra["source_address_hex"] = extra["bacnet_sadr"]
+			extra["component_path"] += fmt.Sprintf("/net/%d/addr/%s", id.SourceNet, extra["bacnet_sadr"])
 		}
 	}
 	return inventory.Device{

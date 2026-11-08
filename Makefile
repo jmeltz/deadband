@@ -1,6 +1,6 @@
-.PHONY: all deadband release deadband-web deadband-web-windows web test vet clean
+.PHONY: all deadband release deadband-web deadband-web-windows web test vet clean capabilities check-capabilities
 
-VERSION ?= 0.8.0
+VERSION ?= 0.8.1
 LDFLAGS := -s -w -X github.com/jmeltz/deadband/pkg/cli.Version=$(VERSION)
 BUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
@@ -45,6 +45,12 @@ test:
 
 vet:
 	go vet ./...
+
+capabilities:
+	go run ./cmd/query-capabilities
+
+check-capabilities:
+	go run ./cmd/query-capabilities --check
 
 clean:
 	rm -rf $(BINDIR)

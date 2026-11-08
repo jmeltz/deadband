@@ -489,6 +489,9 @@ func isPlaceholderModel(m string) bool {
 }
 
 func deviceMergeKey(d inventory.Device, seen map[string]inventory.Device) string {
+	if path := d.Extra["component_path"]; d.Protocol == "bacnet" && path != "" {
+		return d.IP + "|" + path
+	}
 	if d.Slot > 0 || (d.Extra != nil && d.Extra["component"] == "chassis_slot") {
 		return fmt.Sprintf("%s|slot:%d", d.IP, d.Slot)
 	}

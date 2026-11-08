@@ -1,0 +1,97 @@
+{
+  "engine_package": "github.com/jmeltz/deadband/pkg/query",
+  "engine_version": "v0.8.0",
+  "profiles": [
+    {
+      "device_validation_required": true,
+      "executable": true,
+      "key": "enip_identity_tcp",
+      "name": "EtherNet/IP endpoint identity",
+      "protocol": "enip",
+      "requested_fields": [
+        "vendor",
+        "model",
+        "firmware",
+        "serial"
+      ],
+      "schema_versions": [
+        1
+      ],
+      "status": "stable",
+      "transports": [
+        {
+          "port": 44818,
+          "transport": "tcp"
+        }
+      ],
+      "validation": "protocol_contract_and_loopback",
+      "wire_profile_id": "enip-identity-tcp-v1"
+    },
+    {
+      "device_validation_required": true,
+      "executable": false,
+      "key": "modbus_known_unit",
+      "name": "Modbus identification at a known unit",
+      "protocol": "modbus",
+      "requested_fields": [],
+      "schema_versions": [],
+      "status": "planned",
+      "transports": [],
+      "validation": "not_implemented"
+    },
+    {
+      "device_validation_required": true,
+      "executable": false,
+      "key": "s7_known_tsap",
+      "name": "S7 identification at a known TSAP",
+      "protocol": "s7",
+      "requested_fields": [],
+      "schema_versions": [],
+      "status": "planned",
+      "transports": [],
+      "validation": "not_implemented"
+    },
+    {
+      "device_validation_required": true,
+      "executable": false,
+      "key": "bacnet_known_instance",
+      "name": "BACnet identification at a known device instance",
+      "protocol": "bacnet",
+      "requested_fields": [],
+      "schema_versions": [],
+      "status": "planned",
+      "transports": [],
+      "validation": "not_implemented"
+    },
+    {
+      "device_validation_required": true,
+      "executable": false,
+      "key": "ads_device_info",
+      "name": "Route-less ADS device information",
+      "protocol": "ads",
+      "requested_fields": [],
+      "schema_versions": [],
+      "status": "planned",
+      "transports": [],
+      "validation": "not_implemented"
+    },
+    {
+      "device_validation_required": true,
+      "executable": false,
+      "key": "sopas_identity",
+      "name": "SOPAS identification",
+      "protocol": "sopas",
+      "requested_fields": [],
+      "schema_versions": [],
+      "status": "planned",
+      "transports": [],
+      "validation": "not_implemented"
+    }
+  ],
+  "registry_version": 1,
+  "source_package": "github.com/jmeltz/deadband/pkg/capability",
+  "source_version": "v0.8.1",
+  "wire_schema_versions": [
+    1
+  ]
+}

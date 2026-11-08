@@ -81,6 +81,9 @@ func Analyze(path string, progress func(string)) (*AnalyzeResult, error) {
 }
 
 func passiveDeviceKey(d inventory.Device) string {
+	if path := d.Extra["component_path"]; d.Protocol == "bacnet" && path != "" {
+		return d.IP + "#" + path
+	}
 	if d.Protocol == "bacnet" && d.Extra != nil && d.Extra["device_instance"] != "" {
 		return d.IP + "#bacnet:" + d.Extra["device_instance"]
 	}
@@ -279,8 +282,10 @@ func tryBACnet(ip string, data []byte) *inventory.Device {
 		switch propID {
 		case 70: // Model_Name
 			id.ModelName = val
-		case 44, 12: // Firmware_Revision, Application_Software_Version
+		case 44: // Firmware_Revision
 			id.FirmwareRevision = val
+		case 12: // Application_Software_Version remains separate evidence.
+			id.ApplicationSoftwareVersion = val
 		case 121: // Vendor_Name
 			id.VendorName = val
 		case 77: // Object_Name

@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Verify capability artifact
+        run: go run ./cmd/query-capabilities --check
       - name: Go vet
         run: go vet ./cmd/... ./pkg/...
       - name: Go test

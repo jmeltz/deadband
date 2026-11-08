@@ -167,6 +167,16 @@ func buildBACnetReadPropAckPacket(instance uint32, propID byte, strVal string) [
 	return bvlc
 }
 
+func buildRoutedBACnetReadPropAckPacket(instance uint32, propID byte, value string, network uint16, address []byte) []byte {
+	frame := buildBACnetReadPropAckPacket(instance, propID, value)
+	npdu := []byte{1, 8, byte(network >> 8), byte(network), byte(len(address))}
+	npdu = append(npdu, address...)
+	npdu = append(npdu, frame[6:]...)
+	out := append([]byte{0x81, 0x0a, 0, 0}, npdu...)
+	binary.BigEndian.PutUint16(out[2:4], uint16(len(out)))
+	return out
+}
+
 func buildOPCUAGetEndpointsRespPayload(appURI, productURI, appName string) []byte {
 	var body bytes.Buffer
 	// NodeId FourByte: ns=0, id=431 (GetEndpointsResponse)
@@ -254,7 +264,7 @@ func TestPassiveAnalyze_BACnetADS_SICK_OPCUA_Fox(t *testing.T) {
 		buildTestEthernetIPv4Frame("10.50.1.10", "10.50.1.200", 17, 47808, 47808, buildBACnetReadPropAckPacket(8501, 44, "4.2.1")),
 		buildTestEthernetIPv4Frame("10.50.1.10", "10.50.1.200", 17, 47808, 47808, buildBACnetReadPropAckPacket(8501, 58, "Cold Room 2")),
 		buildTestEthernetIPv4Frame("10.50.1.10", "10.50.1.200", 17, 47808, 47808, bvlcIAm2),
-		buildTestEthernetIPv4Frame("10.50.1.10", "10.50.1.200", 17, 47808, 47808, buildBACnetReadPropAckPacket(8502, 70, "AK-CC55")),
+		buildTestEthernetIPv4Frame("10.50.1.10", "10.50.1.200", 17, 47808, 47808, buildRoutedBACnetReadPropAckPacket(8502, 70, "AK-CC55", 20, []byte{5})),
 		buildTestEthernetIPv4Frame("10.50.1.20", "10.50.1.200", 6, 48898, 52001, adsTCP),
 		buildTestEthernetIPv4Frame("10.50.1.30", "10.50.1.200", 6, 2111, 52002, sickCoLaA),
 		buildTestEthernetIPv4Frame("10.50.1.40", "10.50.1.200", 6, 4840, 52003, opcuaResp),

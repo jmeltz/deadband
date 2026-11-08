@@ -267,6 +267,7 @@ func CIPIdentityToDevice(ip string, id *CIPIdentity) inventory.Device {
 		Serial:   fmt.Sprintf("%08X", id.Serial),
 		Protocol: "cip",
 		Port:     EIPPort,
+		Extra:    map[string]string{"component_kind": "endpoint", "component_path": "identity", "version_kind": "identity_revision", "vendor_id": strconv.Itoa(int(id.VendorID)), "device_type": strconv.Itoa(int(id.DeviceType)), "product_code": strconv.Itoa(int(id.ProductCode))},
 	}
 }
 
@@ -338,15 +339,19 @@ func discoverCIP(ips []string, broadcastAddr string, timeout time.Duration, conc
 			if progress != nil {
 				progress(fmt.Sprintf("Found %d modules in chassis at %s", len(modules), ip))
 			}
-			// Physical modules remain distinct even when model and firmware match.
-			for i := range modules {
-				dev := BackplaneModuleToDevice(ip, &modules[i])
-				devices = append(devices, dev)
-			}
-		} else {
-			// Fall back to the ListIdentity result
-			devices = append(devices, CIPIdentityToDevice(ip, id))
 		}
+		if err != nil {
+			modules = nil
+		}
+		devices = append(devices, cipDiscoveryDevices(ip, id, modules)...)
+	}
+	return devices
+}
+
+func cipDiscoveryDevices(ip string, id *CIPIdentity, modules []BackplaneModule) []inventory.Device {
+	devices := []inventory.Device{CIPIdentityToDevice(ip, id)}
+	for i := range modules {
+		devices = append(devices, BackplaneModuleToDevice(ip, &modules[i]))
 	}
 	return devices
 }
@@ -596,7 +601,7 @@ func BackplaneModuleToDevice(ip string, mod *BackplaneModule) inventory.Device {
 		Protocol: "cip",
 		Port:     EIPPort,
 		Slot:     mod.Slot,
-		Extra:    map[string]string{"slot": strconv.Itoa(mod.Slot), "component": "chassis_slot"},
+		Extra:    map[string]string{"slot": strconv.Itoa(mod.Slot), "component": "chassis_slot", "component_kind": "chassis_slot", "component_path": fmt.Sprintf("backplane/slot/%d", mod.Slot), "version_kind": "identity_revision", "vendor_id": strconv.Itoa(int(mod.VendorID)), "device_type": strconv.Itoa(int(mod.DeviceType)), "product_code": strconv.Itoa(int(mod.ProductCode))},
 	}
 }
 
